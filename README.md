@@ -1,106 +1,106 @@
-# Voice Interview Agent
+# AI Recruitment Screening Platform
 
-MVP portable de un agente conversacional por voz para entrevistas iniciales de personal.
+Portable MVP of a voice-based conversational agent for initial candidate interviews, with a recruiter-facing platform for reviewing interview results and candidate information.
 
-El proyecto separa interfaz, API de sesión, engine determinístico, agente, skills, routines, knowledge base y storage. El agente no aprueba, rechaza ni puntúa candidatos; registra una entrevista breve y produce información neutral para revisión humana.
+The project separates the web interface, session API, deterministic interview engine, agent definition, skills, routines, knowledge base, and storage. The agent does not approve, reject, or score candidates. It conducts a short interview and produces neutral information for human review.
 
-## Arquitectura
+## Architecture
 
-- `interfaces/web`: experiencia web para candidato y recruiter.
-- `services/session-api`: sesiones, tokens efímeros de voz, coordinación de proveedores y acceso recruiter.
-- `engines/interview`: estado determinístico, consentimiento, turnos, eventos y resúmenes.
-- `agents/interview-agent`: definición del agente, tools, schemas y guardrails.
-- `skills/interview`: capacidades reutilizables documentadas.
-- `routines/interview`: flujo `default-interview`.
-- `knowledge/interview`: preguntas, perfil general y política.
-- `storage/migrations`: schema PostgreSQL inicial.
-- `mcps/speech`: boundaries para OpenAI y Deepgram.
+- `interfaces/web`: web experience for candidates and recruiters.
+- `services/session-api`: sessions, ephemeral voice tokens, provider coordination, and recruiter access.
+- `engines/interview`: deterministic state, consent, turns, events, and summaries.
+- `agents/interview-agent`: agent definition, tools, schemas, and guardrails.
+- `skills/interview`: documented reusable capabilities.
+- `routines/interview`: `default-interview` workflow.
+- `knowledge/interview`: questions, general role profile, and policy.
+- `storage/migrations`: initial PostgreSQL schema.
+- `mcps/speech`: boundaries for OpenAI and Deepgram.
 
-## Requisitos
+## Requirements
 
-- Docker y Docker Compose.
-- `OPENAI_API_KEY` para voz con OpenAI Realtime.
-- `RECRUITER_AUTH_ENABLED=false` para desarrollo local sin auth recruiter.
-- `RECRUITER_ACCESS_TOKEN` para proteger la pantalla recruiter cuando `RECRUITER_AUTH_ENABLED=true`.
-- `EMAIL_PROVIDER=log` para simular email de agradecimiento sin proveedor externo.
+- Docker and Docker Compose.
+- `OPENAI_API_KEY` for voice with OpenAI Realtime.
+- `RECRUITER_AUTH_ENABLED=false` for local development without recruiter authentication.
+- `RECRUITER_ACCESS_TOKEN` to protect the recruiter screen when `RECRUITER_AUTH_ENABLED=true`.
+- `EMAIL_PROVIDER=log` to simulate thank-you emails without an external email provider.
 
-## Correr local
+## Run Locally
 
-1. Crear un `.env` desde `.env.example`.
-2. Completar `OPENAI_API_KEY`.
-3. Dejar `RECRUITER_AUTH_ENABLED=false` para desarrollo local o definir `RECRUITER_AUTH_ENABLED=true` y un `RECRUITER_ACCESS_TOKEN`.
-4. Dejar `EMAIL_PROVIDER=log` para desarrollo local.
-5. Ejecutar:
+1. Create a `.env` file from `.env.example`.
+2. Set `OPENAI_API_KEY`.
+3. Keep `RECRUITER_AUTH_ENABLED=false` for local development, or set `RECRUITER_AUTH_ENABLED=true` and define a `RECRUITER_ACCESS_TOKEN`.
+4. Keep `EMAIL_PROVIDER=log` for local development.
+5. Run:
 
 ```bash
 docker compose up --build
 ```
 
-Servicios:
+Services:
 
-- Candidato: `http://localhost:5173`
-- Recruiter: `http://localhost:5173/recruiter`
+- Candidate app: `http://localhost:5173`
+- Recruiter app: `http://localhost:5173/recruiter`
 - Session API: `http://localhost:3001`
 - Interview Engine: `http://localhost:3002`
 
-## Flujo candidato
+## Candidate Flow
 
-1. El candidato abre `http://localhost:5173`.
-2. La entrevista intenta iniciar automáticamente.
-3. El navegador pide permiso de micrófono.
-4. El agente saluda, aclara que la charla no debería tomar más de 5 minutos y pide consentimiento.
-5. El agente pregunta nombre y apellido.
-6. El agente puede pedir un correo opcional para enviar confirmación.
-7. El agente pregunta puesto o área de interés y continúa el flujo laboral.
-8. Luego de la última pregunta, el agente cierra la conversación.
-9. La sesión queda guardada para revisión recruiter.
+1. The candidate opens `http://localhost:5173`.
+2. The interview attempts to start automatically.
+3. The browser requests microphone permission.
+4. The agent greets the candidate, explains that the conversation should take no more than 5 minutes, and asks for consent.
+5. The agent asks for the candidate’s first and last name.
+6. The agent may ask for an optional email address to send a confirmation.
+7. The agent asks about the position or area of interest and continues the job-related flow.
+8. After the final question, the agent closes the conversation.
+9. The session is stored for recruiter review.
 
-La pantalla candidato no muestra transcripción ni resumen.
+The candidate screen does not display the transcript or summary.
 
-## Flujo recruiter
+## Recruiter Flow
 
-1. Abrir `http://localhost:5173/recruiter`.
-2. Ingresar el valor de `RECRUITER_ACCESS_TOKEN`.
-3. Revisar KPIs, embudo, entrevistas recientes y automatización de email.
-4. Abrir `Ver detalle` en una entrevista para ver identidad, email, puesto, resumen, transcript y eventos de email.
+1. Open `http://localhost:5173/recruiter`.
+2. Enter the value of `RECRUITER_ACCESS_TOKEN`.
+3. Review KPIs, funnel information, recent interviews, and email automation.
+4. Open `View details` on an interview to see identity, email, role, summary, transcript, and email events.
 
-Si `RECRUITER_AUTH_ENABLED=false`, los endpoints recruiter no exigen token para desarrollo local.
+If `RECRUITER_AUTH_ENABLED=false`, recruiter endpoints do not require a token for local development.
 
-Si `RECRUITER_AUTH_ENABLED=true`, los endpoints recruiter exigen:
+If `RECRUITER_AUTH_ENABLED=true`, recruiter endpoints require:
 
 ```http
 Authorization: Bearer <RECRUITER_ACCESS_TOKEN>
 ```
 
-El endpoint `GET /recruiter/dashboard` usa el mismo token y devuelve los agregados del panel.
+The `GET /recruiter/dashboard` endpoint uses the same token and returns the dashboard aggregates.
 
-El endpoint `GET /recruiter/interviews/:sessionId` devuelve el detalle real de entrevista.
+The `GET /recruiter/interviews/:sessionId` endpoint returns the real interview details.
 
-## Email automático
+## Automated Email
 
-Cuando una sesión pasa a `completed`, el engine intenta enviar un email de agradecimiento si existe `candidate_email`.
+When a session moves to `completed`, the engine attempts to send a thank-you email if `candidate_email` exists.
 
-Para desarrollo local:
+For local development:
 
 ```env
 EMAIL_PROVIDER=log
 ```
 
-El provider `log` no envía correo real. Registra destinatario, asunto e idempotency key en logs del `interview-engine`.
+The `log` provider does not send real emails. It logs the recipient, subject, and idempotency key in the `interview-engine` logs.
 
-La idempotencia usa:
+Idempotency uses:
 
 ```text
 session_id + thank_you_email
 ```
 
-Si no hay email del candidato, se registra un evento interno y no se bloquea el cierre de entrevista.
+If the candidate email is missing, an internal event is recorded and the interview closing flow is not blocked.
 
-## Endpoints principales
+## Main Endpoints
 
 - `GET /health`
 - `POST /sessions`
-- `GET /sessions` con token recruiter
+- `GET /sessions` with recruiter token
 - `POST /sessions/:sessionId/realtime-token`
 - `POST /sessions/:sessionId/end`
 - `GET /sessions/:sessionId`
@@ -112,23 +112,23 @@ Si no hay email del candidato, se registra un evento interno y no se bloquea el 
 - `GET /recruiter/dashboard`
 - `GET /recruiter/interviews/:sessionId`
 
-## Modelo preparado para invitaciones
+## Invitation-Ready Model
 
-`interview_sessions` incluye `interview_token` con índice único parcial. Esto deja listo el modelo para links futuros del tipo:
+`interview_sessions` includes an `interview_token` with a partial unique index. This prepares the data model for future links such as:
 
 ```text
 /interview/:token
 ```
 
-El flujo completo de invitaciones por email queda fuera del MVP actual.
+The complete email invitation flow is outside the scope of the current MVP.
 
-## Extender
+## Extension Points
 
-- Cambiar preguntas en `knowledge/interview/question-bank.json`.
-- Ajustar políticas en `knowledge/interview/policy.md`.
-- Modificar flujo en `routines/interview/default-interview.routine.md`.
-- Implementar Deepgram completando `services/session-api/src/providers/deepgram.provider.ts`.
-- Agregar autenticación formal para recruiter antes de usarlo en producción.
-- Implementar SMTP o Resend como provider real de email.
-- Implementar invitaciones reales con `interview_token`.
-- Agregar cambio manual de estado por recruiter.
+- Change questions in `knowledge/interview/question-bank.json`.
+- Adjust policies in `knowledge/interview/policy.md`.
+- Modify the flow in `routines/interview/default-interview.routine.md`.
+- Implement Deepgram by completing `services/session-api/src/providers/deepgram.provider.ts`.
+- Add formal recruiter authentication before using the platform in production.
+- Implement SMTP or Resend as a real email provider.
+- Implement real invitations using `interview_token`.
+- Add manual status changes by recruiters.
