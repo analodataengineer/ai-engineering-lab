@@ -50,22 +50,43 @@ Status: design / MVP.
 
 ---
 
-### 2. Parametric Insurance Multi-Agent POC
+### 2. AI Recruitment Screening Platform
 
-A proof of concept for a parametric insurance system based on external observations, deterministic rules, specialized agents, and traceable decisions.
+An AI-powered recruitment screening platform that automates the initial candidate interview process and provides recruiters with a dashboard to manage job openings, candidates, and interview workflows.
+
+The system includes an interview agent that conducts the first screening conversation with candidates, collects structured responses, and makes the information available to recruiters through a dedicated platform.
+
+Main features:
+
+- AI interview agent for initial candidate screening
+- Recruiter dashboard
+- Job position management
+- Candidate tracking by job opening
+- Automated interview email delivery
+- Interview link generation
+- Candidate response collection
+- Recruiter access to screening information
+- Backend integration for real candidate and job data
 
 Main components:
 
-- Product engine
-- Claims engine
-- Oracle sources
-- Event dispatcher
-- Source agent
-- Evaluation agent
-- Settlement agent
-- Subscription agent
+- Candidate interview interface
+- AI interview agent
+- Recruiter platform
+- Backend API
+- Candidate and job data persistence
+- Email notification workflow
+- Authentication and access control
 
-Status: architecture and backend in progress.
+Architecture focus:
+
+- Separation between AI conversation flow and deterministic business logic
+- Structured candidate data collection
+- Recruiter-facing operational dashboard
+- Automated communication workflow
+- Scalable foundation for future ATS integrations
+
+Status: functional MVP.
 
 ---
 
