@@ -1,140 +1,134 @@
+# Voice Interview Agent
 
-# AI Engineering Lab
+MVP portable de un agente conversacional por voz para entrevistas iniciales de personal.
 
-A practical engineering lab for projects focused on Data, Generative AI, AI Agents, automation, dashboards, and scalable architectures applied to real business problems.
+El proyecto separa interfaz, API de sesión, engine determinístico, agente, skills, routines, knowledge base y storage. El agente no aprueba, rechaza ni puntúa candidatos; registra una entrevista breve y produce información neutral para revisión humana.
 
-## Objective
+## Arquitectura
 
-This repository works as a technical portfolio to document and build projects related to data engineering, artificial intelligence, multi-agent systems, and process automation.
+- `interfaces/web`: experiencia web para candidato y recruiter.
+- `services/session-api`: sesiones, tokens efímeros de voz, coordinación de proveedores y acceso recruiter.
+- `engines/interview`: estado determinístico, consentimiento, turnos, eventos y resúmenes.
+- `agents/interview-agent`: definición del agente, tools, schemas y guardrails.
+- `skills/interview`: capacidades reutilizables documentadas.
+- `routines/interview`: flujo `default-interview`.
+- `knowledge/interview`: preguntas, perfil general y política.
+- `storage/migrations`: schema PostgreSQL inicial.
+- `mcps/speech`: boundaries para OpenAI y Deepgram.
 
-The main goal is to design simple, modular, secure, and scalable solutions while clearly separating deterministic business logic from AI-assisted reasoning.
+## Requisitos
 
-## Areas of Work
+- Docker y Docker Compose.
+- `OPENAI_API_KEY` para voz con OpenAI Realtime.
+- `RECRUITER_AUTH_ENABLED=false` para desarrollo local sin auth recruiter.
+- `RECRUITER_ACCESS_TOKEN` para proteger la pantalla recruiter cuando `RECRUITER_AUTH_ENABLED=true`.
+- `EMAIL_PROVIDER=log` para simular email de agradecimiento sin proveedor externo.
 
-- Data Engineering
-- Generative AI
-- AI Agents
-- Multi-Agent Systems
-- Dashboard Automation
-- Business Intelligence
-- API Integrations
-- Workflow Automation
-- Software Architecture
-- Retrieval, Memory, and Tooling
+## Correr local
 
-## Included Projects
+1. Crear un `.env` desde `.env.example`.
+2. Completar `OPENAI_API_KEY`.
+3. Dejar `RECRUITER_AUTH_ENABLED=false` para desarrollo local o definir `RECRUITER_AUTH_ENABLED=true` y un `RECRUITER_ACCESS_TOKEN`.
+4. Dejar `EMAIL_PROVIDER=log` para desarrollo local.
+5. Ejecutar:
 
-### 1. AI Data Dashboard Agents
+```bash
+docker compose up --build
+```
 
-A system designed to connect multiple data sources, process business information, and generate dynamic dashboards assisted by AI.
+Servicios:
 
-Planned data sources:
+- Candidato: `http://localhost:5173`
+- Recruiter: `http://localhost:5173/recruiter`
+- Session API: `http://localhost:3001`
+- Interview Engine: `http://localhost:3002`
 
-- SQL Server
-- PostgreSQL
-- MongoDB
-- Excel / CSV
-- Emails
-- External APIs
+## Flujo candidato
 
-Main components:
+1. El candidato abre `http://localhost:5173`.
+2. La entrevista intenta iniciar automáticamente.
+3. El navegador pide permiso de micrófono.
+4. El agente saluda, aclara que la charla no debería tomar más de 5 minutos y pide consentimiento.
+5. El agente pregunta nombre y apellido.
+6. El agente puede pedir un correo opcional para enviar confirmación.
+7. El agente pregunta puesto o área de interés y continúa el flujo laboral.
+8. Luego de la última pregunta, el agente cierra la conversación.
+9. La sesión queda guardada para revisión recruiter.
 
-- Data connectors
-- Backend API
-- Agent orchestration layer
-- Deterministic query and validation engine
-- Dashboard generation
-- Persistence and traceability
+La pantalla candidato no muestra transcripción ni resumen.
 
-Status: design / MVP.
+## Flujo recruiter
 
----
+1. Abrir `http://localhost:5173/recruiter`.
+2. Ingresar el valor de `RECRUITER_ACCESS_TOKEN`.
+3. Revisar KPIs, embudo, entrevistas recientes y automatización de email.
+4. Abrir `Ver detalle` en una entrevista para ver identidad, email, puesto, resumen, transcript y eventos de email.
 
-### 2. AI Recruitment Screening Platform
+Si `RECRUITER_AUTH_ENABLED=false`, los endpoints recruiter no exigen token para desarrollo local.
 
-An AI-powered recruitment screening platform that automates the initial candidate interview process and provides recruiters with a dashboard to manage job openings, candidates, and interview workflows.
+Si `RECRUITER_AUTH_ENABLED=true`, los endpoints recruiter exigen:
 
-The system includes an interview agent that conducts the first screening conversation with candidates, collects structured responses, and makes the information available to recruiters through a dedicated platform.
+```http
+Authorization: Bearer <RECRUITER_ACCESS_TOKEN>
+```
 
-Main features:
+El endpoint `GET /recruiter/dashboard` usa el mismo token y devuelve los agregados del panel.
 
-- AI interview agent for initial candidate screening
-- Recruiter dashboard
-- Job position management
-- Candidate tracking by job opening
-- Automated interview email delivery
-- Interview link generation
-- Candidate response collection
-- Recruiter access to screening information
-- Backend integration for real candidate and job data
+El endpoint `GET /recruiter/interviews/:sessionId` devuelve el detalle real de entrevista.
 
-Main components:
+## Email automático
 
-- Candidate interview interface
-- AI interview agent
-- Recruiter platform
-- Backend API
-- Candidate and job data persistence
-- Email notification workflow
-- Authentication and access control
+Cuando una sesión pasa a `completed`, el engine intenta enviar un email de agradecimiento si existe `candidate_email`.
 
-Architecture focus:
+Para desarrollo local:
 
-- Separation between AI conversation flow and deterministic business logic
-- Structured candidate data collection
-- Recruiter-facing operational dashboard
-- Automated communication workflow
-- Scalable foundation for future ATS integrations
+```env
+EMAIL_PROVIDER=log
+```
 
-Status: functional MVP.
+El provider `log` no envía correo real. Registra destinatario, asunto e idempotency key en logs del `interview-engine`.
 
----
-
-### 3. Generative AI Learning Content
-
-Educational content about generative AI, foundation models, LLMs, SLMs, agents, and practical use cases for both general and technical audiences.
-
-Status: content in development.
-
-## Architecture Principles
-
-- Clear separation between AI reasoning, business rules, and persistence.
-- Agents with specific responsibilities.
-- Deterministic engines for critical validations.
-- Traceability of events and decisions.
-- Modular and extensible design.
-- External configuration through environment variables.
-- Docker-ready and reproducible execution.
-- Security and observability considered from the beginning.
-
-## Tech Stack
-
-The stack may vary by project, but this lab mainly works with:
-
-- Python
-- Node.js / TypeScript
-- PostgreSQL
-- MongoDB
-- Redis
-- Docker
-- REST APIs
-- LLMs
-- AI Agents
-- Business Intelligence tools
-
-## Suggested Structure
+La idempotencia usa:
 
 ```text
-ai-engineering-lab/
-├── README.md
-├── docs/
-│   ├── architecture.md
-│   ├── roadmap.md
-│   └── decisions.md
-├── projects/
-│   ├── ai-data-dashboard-agents/
-│   ├── parametric-insurance-poc/
-│   └── genai-learning-content/
-├── examples/
-├── assets/
-└── LICENSE
+session_id + thank_you_email
+```
+
+Si no hay email del candidato, se registra un evento interno y no se bloquea el cierre de entrevista.
+
+## Endpoints principales
+
+- `GET /health`
+- `POST /sessions`
+- `GET /sessions` con token recruiter
+- `POST /sessions/:sessionId/realtime-token`
+- `POST /sessions/:sessionId/end`
+- `GET /sessions/:sessionId`
+- `POST /sessions/:sessionId/consent`
+- `POST /sessions/:sessionId/turns`
+- `POST /sessions/:sessionId/summary`
+- `POST /sessions/:sessionId/candidate-email`
+- `POST /sessions/:sessionId/candidate-identity`
+- `GET /recruiter/dashboard`
+- `GET /recruiter/interviews/:sessionId`
+
+## Modelo preparado para invitaciones
+
+`interview_sessions` incluye `interview_token` con índice único parcial. Esto deja listo el modelo para links futuros del tipo:
+
+```text
+/interview/:token
+```
+
+El flujo completo de invitaciones por email queda fuera del MVP actual.
+
+## Extender
+
+- Cambiar preguntas en `knowledge/interview/question-bank.json`.
+- Ajustar políticas en `knowledge/interview/policy.md`.
+- Modificar flujo en `routines/interview/default-interview.routine.md`.
+- Implementar Deepgram completando `services/session-api/src/providers/deepgram.provider.ts`.
+- Agregar autenticación formal para recruiter antes de usarlo en producción.
+- Implementar SMTP o Resend como provider real de email.
+- Implementar invitaciones reales con `interview_token`.
+- Agregar cambio manual de estado por recruiter.
