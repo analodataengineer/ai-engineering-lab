@@ -1,0 +1,10 @@
+{
+  "id": "general",
+  "name": "Perfil general",
+  "summaryCriteria": [
+    "Resumir solo información declarada por la persona.",
+    "Separar experiencia, herramientas y disponibilidad.",
+    "Marcar puntos pendientes para revisión humana.",
+    "No incluir scoring ni recomendaciones de contratación."
+  ]
+}

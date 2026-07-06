@@ -1,0 +1,51 @@
+{
+  "general": [
+    {
+      "id": "candidate_identity",
+      "text": "Para comenzar, ¿podés decirme tu nombre y apellido?",
+      "required": true,
+      "sensitive": false
+    },
+    {
+      "id": "candidate_email",
+      "text": "¿A qué correo podemos enviarte la confirmación de la entrevista?",
+      "required": false,
+      "sensitive": false
+    },
+    {
+      "id": "target_role",
+      "text": "¿Qué tipo de puesto o área te interesa?",
+      "required": true
+    },
+    {
+      "id": "relevant_experience",
+      "text": "Contame brevemente qué experiencia tenés relacionada con este tipo de trabajo.",
+      "required": true
+    },
+    {
+      "id": "tools_or_tasks",
+      "text": "¿Qué herramientas, tecnologías o tareas dominás mejor?",
+      "required": false
+    },
+    {
+      "id": "behavioral_example",
+      "text": "Contame una situación laboral desafiante y cómo la resolviste.",
+      "required": false
+    },
+    {
+      "id": "availability",
+      "text": "¿Qué disponibilidad o modalidad laboral preferís?",
+      "required": false
+    },
+    {
+      "id": "application_motivation",
+      "text": "¿Qué te llevó a postularte a este puesto?",
+      "required": false
+    },
+    {
+      "id": "company_interest",
+      "text": "¿Por qué elegiste esta empresa?",
+      "required": false
+    }
+  ]
+}

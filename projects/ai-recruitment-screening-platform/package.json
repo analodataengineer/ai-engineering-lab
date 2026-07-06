@@ -1,0 +1,22 @@
+{
+  "name": "voice-interview-agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "interfaces/web",
+    "services/session-api",
+    "engines/interview",
+    "agents/interview-agent"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev:web": "npm run dev -w interfaces/web",
+    "dev:session-api": "npm run dev -w services/session-api",
+    "dev:interview-engine": "npm run dev -w engines/interview"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.15",
+    "typescript": "^5.5.4"
+  }
+}

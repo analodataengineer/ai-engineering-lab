@@ -1,0 +1,64 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: interfaces/web/Dockerfile
+    environment:
+      VITE_SESSION_API_URL: http://localhost:3001
+    ports:
+      - "5173:5173"
+    depends_on:
+      - session-api
+
+  session-api:
+    build:
+      context: .
+      dockerfile: services/session-api/Dockerfile
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY}
+      VOICE_PROVIDER: ${VOICE_PROVIDER:-openai}
+      RECRUITER_AUTH_ENABLED: ${RECRUITER_AUTH_ENABLED:-false}
+      RECRUITER_ACCESS_TOKEN: ${RECRUITER_ACCESS_TOKEN}
+      SESSION_API_PORT: 3001
+      INTERVIEW_ENGINE_URL: http://interview-engine:3002
+    ports:
+      - "3001:3001"
+    depends_on:
+      - interview-engine
+
+  interview-engine:
+    build:
+      context: .
+      dockerfile: engines/interview/Dockerfile
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/interviews
+      REDIS_URL: redis://redis:6379
+      INTERVIEW_ENGINE_PORT: 3002
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-log}
+      EMAIL_FROM: ${EMAIL_FROM:-Recruiting <no-reply@example.com>}
+    ports:
+      - "3002:3002"
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: interviews
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./storage/migrations:/docker-entrypoint-initdb.d:ro
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres-data:
