@@ -6,6 +6,8 @@ The project separates the web interface, session API, deterministic interview en
 
 ## Architecture
 
+Evaluaciones locales: `evals/` contiene casos sintéticos, comprobaciones determinísticas, un juez semántico opcional y reportes JSON/Markdown. Ver [guía de evaluaciones](evals/README.md). El baseline se reproduce con `npm run eval:test` y `npm run eval -- --verify-expectations` después de `npm ci`.
+
 - `interfaces/web`: web experience for candidates and recruiters.
 - `services/session-api`: sessions, ephemeral voice tokens, provider coordination, and recruiter access.
 - `engines/interview`: deterministic state, consent, turns, events, and summaries.

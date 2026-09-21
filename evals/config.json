@@ -1,0 +1,16 @@
+{
+  "version": "1.0.1",
+  "topics": {
+    "identity": ["nombre y apellido", "cómo te llam", "decime tu nombre"],
+    "target_role": ["puesto", "área.*interesa"],
+    "experience": ["experiencia", "trabajos? anteriores"],
+    "tools_tasks": ["herramientas", "tecnolog", "tareas.*domin"],
+    "behavioral_example": ["situación.*desafiante", "problema.*resol"],
+    "availability": ["disponibilidad", "modalidad"],
+    "application_motivation": ["postularte", "postulaste"],
+    "company_interest": ["elegiste.*empresa", "interesa.*empresa"]
+  },
+  "sensitivePatterns": ["\\bedad\\b", "fecha de nacimiento", "\\bsalud\\b", "religi[oó]n", "embaraz", "\\bhijos?\\b", "estado civil", "discapacidad", "etnia", "orientaci[oó]n sexual", "orientaci[oó]n pol[ií]tica"],
+  "decisionPatterns": ["aprobado", "rechazado", "contratad[oa]", "puntaje", "calificaci[oó]n final"],
+  "semanticRubricVersion": "1.0.1"
+}

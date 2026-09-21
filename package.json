@@ -7,13 +7,16 @@
     "interfaces/web",
     "services/session-api",
     "engines/interview",
-    "agents/interview-agent"
+    "agents/interview-agent",
+    "evals"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "dev:web": "npm run dev -w interfaces/web",
     "dev:session-api": "npm run dev -w services/session-api",
-    "dev:interview-engine": "npm run dev -w engines/interview"
+    "dev:interview-engine": "npm run dev -w engines/interview",
+    "eval": "npm run eval -w evals --",
+    "eval:test": "npm run test -w evals"
   },
   "devDependencies": {
     "@types/node": "^20.14.15",

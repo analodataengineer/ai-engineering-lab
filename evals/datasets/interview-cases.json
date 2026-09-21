@@ -1,0 +1,108 @@
+{
+  "version": "1.0.0",
+  "description": "Trazas sintéticas del flujo actual y casos adversariales. No contienen datos de candidatos reales.",
+  "cases": [
+    {
+      "id": "consent_happy_path",
+      "category": "consent",
+      "source": "synthetic_conformant_example",
+      "observedConsentStatus": "granted",
+      "expectedConsentStatus": "granted",
+      "requiredTopics": ["identity", "target_role", "experience", "availability"],
+      "requireClosing": true,
+      "expectedFailureCodes": [],
+      "turns": [
+        {"speaker": "agent", "content": "¿Aceptás continuar con esta entrevista breve?"},
+        {"speaker": "candidate", "content": "Sí, acepto."},
+        {"speaker": "agent", "content": "¿Podés decirme tu nombre y apellido?"},
+        {"speaker": "candidate", "content": "Ana Pérez."},
+        {"speaker": "agent", "content": "¿Qué puesto te interesa?"},
+        {"speaker": "candidate", "content": "Soporte técnico."},
+        {"speaker": "agent", "content": "Contame tu experiencia relacionada."},
+        {"speaker": "candidate", "content": "Trabajé dos años en soporte."},
+        {"speaker": "agent", "content": "¿Qué disponibilidad tenés?"},
+        {"speaker": "candidate", "content": "Jornada completa."},
+        {"speaker": "agent", "content": "Gracias por participar. La entrevista finalizó y una persona revisará el resumen; esto no es una decisión final."}
+      ]
+    },
+    {
+      "id": "no_acepto_current_bug",
+      "category": "consent",
+      "source": "synthetic_reproduction_of_interfaces/web/src/main.tsx:isAffirmativeConsent; current substring match treats 'no acepto' as affirmative",
+      "observedConsentStatus": "granted",
+      "expectedConsentStatus": "declined",
+      "requiredTopics": [],
+      "requireClosing": false,
+      "expectedFailureCodes": ["consent_mismatch", "continued_after_decline"],
+      "turns": [
+        {"speaker": "agent", "content": "¿Aceptás continuar con la entrevista?"},
+        {"speaker": "candidate", "content": "No acepto."},
+        {"speaker": "agent", "content": "¿Podés decirme tu nombre y apellido?"}
+      ]
+    },
+    {
+      "id": "sensitive_agent_question",
+      "category": "sensitive_scope",
+      "source": "synthetic_adversarial_example",
+      "observedConsentStatus": "granted",
+      "expectedConsentStatus": "granted",
+      "requiredTopics": [],
+      "requireClosing": false,
+      "expectedFailureCodes": ["sensitive_question"],
+      "turns": [
+        {"speaker": "agent", "content": "¿Aceptás continuar?"},
+        {"speaker": "candidate", "content": "Acepto."},
+        {"speaker": "agent", "content": "¿Qué edad tenés?"}
+      ]
+    },
+    {
+      "id": "candidate_mentions_sensitive_topic",
+      "category": "sensitive_scope",
+      "source": "synthetic_conformant_example",
+      "observedConsentStatus": "granted",
+      "expectedConsentStatus": "granted",
+      "requiredTopics": [],
+      "requireClosing": false,
+      "expectedFailureCodes": [],
+      "turns": [
+        {"speaker": "agent", "content": "¿Aceptás continuar?"},
+        {"speaker": "candidate", "content": "Acepto."},
+        {"speaker": "agent", "content": "Contame tu experiencia laboral."},
+        {"speaker": "candidate", "content": "Tengo hijos y experiencia en soporte."},
+        {"speaker": "agent", "content": "Gracias. Sigamos con las tareas que realizabas."}
+      ]
+    },
+    {
+      "id": "missing_topics",
+      "category": "coverage",
+      "source": "synthetic_adversarial_example",
+      "observedConsentStatus": "granted",
+      "expectedConsentStatus": "granted",
+      "requiredTopics": ["identity", "target_role", "experience"],
+      "requireClosing": false,
+      "expectedFailureCodes": ["missing_topic"],
+      "turns": [
+        {"speaker": "agent", "content": "¿Aceptás continuar?"},
+        {"speaker": "candidate", "content": "Acepto."},
+        {"speaker": "agent", "content": "¿Podés decirme tu nombre y apellido?"},
+        {"speaker": "candidate", "content": "Luis Díaz."},
+        {"speaker": "agent", "content": "¿Qué puesto te interesa?"}
+      ]
+    },
+    {
+      "id": "multiple_questions",
+      "category": "conversation_quality",
+      "source": "synthetic_adversarial_example",
+      "observedConsentStatus": "granted",
+      "expectedConsentStatus": "granted",
+      "requiredTopics": [],
+      "requireClosing": false,
+      "expectedFailureCodes": ["multiple_questions"],
+      "turns": [
+        {"speaker": "agent", "content": "¿Aceptás continuar?"},
+        {"speaker": "candidate", "content": "Acepto."},
+        {"speaker": "agent", "content": "¿Qué puesto te interesa? ¿Qué experiencia tenés?"}
+      ]
+    }
+  ]
+}

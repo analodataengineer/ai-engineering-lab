@@ -10,6 +10,7 @@ venv/
 
 # Builds
 dist/
+*.tsbuildinfo
 build/
 .next/
 out/
@@ -31,6 +32,7 @@ __pycache__/
 *.sqlite
 *.db
 tmp/
+evals/results/
 
 # Local agent tooling
 .agents/
