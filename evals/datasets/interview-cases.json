@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Trazas sintéticas del flujo actual y casos adversariales. No contienen datos de candidatos reales.",
   "cases": [
     {
@@ -26,18 +26,17 @@
       ]
     },
     {
-      "id": "no_acepto_current_bug",
+      "id": "no_acepto_regression",
       "category": "consent",
-      "source": "synthetic_reproduction_of_interfaces/web/src/main.tsx:isAffirmativeConsent; current substring match treats 'no acepto' as affirmative",
-      "observedConsentStatus": "granted",
+      "source": "synthetic_regression_for_interfaces/web/src/consent.ts; explicit refusal must cancel the interview",
+      "observedConsentStatus": "declined",
       "expectedConsentStatus": "declined",
       "requiredTopics": [],
       "requireClosing": false,
-      "expectedFailureCodes": ["consent_mismatch", "continued_after_decline"],
+      "expectedFailureCodes": [],
       "turns": [
         {"speaker": "agent", "content": "¿Aceptás continuar con la entrevista?"},
-        {"speaker": "candidate", "content": "No acepto."},
-        {"speaker": "agent", "content": "¿Podés decirme tu nombre y apellido?"}
+        {"speaker": "candidate", "content": "No acepto."}
       ]
     },
     {

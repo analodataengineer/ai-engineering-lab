@@ -15,6 +15,7 @@ import {
   type SessionPayload
 } from "./api";
 import { connectRealtime } from "./realtime";
+import { classifyConsent, type ConsentDecision } from "./consent";
 import "./styles.css";
 
 const FINAL_AUDIO_GRACE_MS = 10000;
@@ -26,12 +27,9 @@ const statusCopy: Record<string, string> = {
   voice_connected: "Escuchando",
   text_fallback_ready: "Permiso requerido",
   completed: "Registrada",
+  declined: "Entrevista cancelada",
   voice_disconnected: "Registrada"
 };
-
-function isAffirmativeConsent(text: string) {
-  return /\b(si|sí|acepto|de acuerdo|continuar|consiento)\b/i.test(text);
-}
 
 function isClosingMessage(text: string) {
   return /(entrevista|charla).{0,40}(finaliz|termin)|finaliz.{0,40}(entrevista|charla)|gracias por participar/i.test(
@@ -56,20 +54,17 @@ function CandidateInterview() {
   const startedRef = useRef(false);
   const finishingRef = useRef(false);
   const stopVoiceRef = useRef<null | (() => void)>(null);
+  const consentStatusRef = useRef<ConsentDecision>("pending");
+
+  function consentWasDeclined() {
+    return consentStatusRef.current === "declined";
+  }
 
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
     void startInterview();
   }, []);
-
-  async function maybeMarkConsent(sessionId: string, text: string) {
-    if (!isAffirmativeConsent(text)) return;
-    const current = await getSession(sessionId);
-    if (current.session.consent_status === "granted") return;
-    const updated = await markConsent(sessionId, "granted");
-    setSession(updated);
-  }
 
   async function finishInterview(sessionId: string) {
     if (finishingRef.current) return;
@@ -96,6 +91,7 @@ function CandidateInterview() {
   }
 
   async function startInterview() {
+    consentStatusRef.current = "pending";
     setErrorMessage("");
     setConnectionStatus("creating_session");
     setSpeechState("thinking");
@@ -116,9 +112,26 @@ function CandidateInterview() {
         onSpeechState: setSpeechState,
         onError: setErrorMessage,
         onTranscript: async (speaker, content) => {
+          if (consentStatusRef.current === "declined") return;
+          const decision = speaker === "candidate" && consentStatusRef.current === "pending"
+            ? classifyConsent(content)
+            : "pending";
+          if (decision !== "pending") {
+            consentStatusRef.current = decision;
+            if (decision === "declined") {
+              stopVoiceRef.current?.();
+              setConnectionStatus("declined");
+              setSpeechState("idle");
+            }
+          }
           await recordTurn(created.id, { speaker, content });
-          if (speaker === "candidate") {
-            await maybeMarkConsent(created.id, content);
+          if (decision !== "pending") {
+            const updated = await markConsent(created.id, decision);
+            setSession(updated);
+            if (decision === "declined") {
+              setLastMessage("No continuaremos con la entrevista.");
+              return;
+            }
           }
           if (speaker === "agent" && isClosingMessage(content)) {
             await finishInterview(created.id);
@@ -132,6 +145,11 @@ function CandidateInterview() {
         }
       });
       stopVoiceRef.current = stop;
+      if (consentWasDeclined()) {
+        stop();
+        setConnectionStatus("declined");
+        return;
+      }
       setLastMessage("El asistente ya puede hablar y escuchar tus respuestas.");
     } catch (error) {
       setConnectionStatus("text_fallback_ready");
@@ -142,7 +160,8 @@ function CandidateInterview() {
   }
 
   const isCompleted = session?.status === "completed";
-  const isActive = Boolean(session && !isCompleted && connectionStatus !== "idle");
+  const isDeclined = session?.consent_status === "declined";
+  const isActive = Boolean(session && !isCompleted && !isDeclined && connectionStatus !== "idle");
   const canStart = connectionStatus === "text_fallback_ready" || connectionStatus === "idle";
 
   return (
@@ -166,9 +185,11 @@ function CandidateInterview() {
           {statusFromSpeech(speechState, connectionStatus)}
         </div>
 
-        <h1>{isCompleted ? "Entrevista finalizada" : "Entrevista inicial"}</h1>
+        <h1>{isDeclined ? "Entrevista cancelada" : isCompleted ? "Entrevista finalizada" : "Entrevista inicial"}</h1>
         <p className="candidate-subtitle">
-          {isCompleted
+          {isDeclined
+            ? "Respetamos tu decisión de no continuar."
+            : isCompleted
             ? "Gracias. La entrevista fue registrada y será revisada por el equipo de recruiting."
             : "Una breve conversación guiada para conocer tu perfil profesional."}
         </p>
@@ -192,14 +213,14 @@ function CandidateInterview() {
 
         {errorMessage ? <p className="error-message">{errorMessage}</p> : <p className="supporting-copy">{lastMessage}</p>}
 
-        {!isCompleted && canStart ? (
+        {!isCompleted && !isDeclined && canStart ? (
           <button className="candidate-primary" onClick={startInterview}>
             <span>◉</span>
             Comenzar
           </button>
         ) : null}
 
-        {!isCompleted ? <button className="candidate-secondary">Continuar más tarde</button> : null}
+        {!isCompleted && !isDeclined ? <button className="candidate-secondary">Continuar más tarde</button> : null}
         {isCompleted ? <p className="candidate-note">Te enviaremos una confirmación por email si registraste tu correo.</p> : null}
       </section>
     </main>

@@ -1,28 +1,30 @@
-# Evaluaciones locales
+# Local Evaluations
 
-Este paquete consume trazas de entrevistas en JSON. No importa módulos de la aplicación, no usa la base de datos y no llama a OpenAI por defecto. Las trazas incluidas son sintéticas.
+This package evaluates interview traces from JSON files. It does not import application modules, use the database, or call OpenAI by default. The included traces are synthetic.
 
-## Ejecutar
+## Run
 
-Desde la raíz, después de `npm ci`:
+From the repository root, after `npm ci`:
 
 ```bash
 npm run eval:test
 npm run eval -- --verify-expectations
 ```
 
-El segundo comando escribe `evals/results/eval-<versión>-<run-id>.json` y `.md`. Los archivos se ignoran en Git. Cada reporte incluye hashes SHA-256 del dataset, la configuración y la rúbrica semántica, además del commit SHA y `gitDirty` cuando Git está disponible. `--verify-expectations` falla si el evaluador no detecta los códigos esperados; `--strict` falla ante cualquier resultado global `fail` o `partial`. El baseline incluye casos adversariales y omite el juez semántico, por lo que `--strict` debe fallar inicialmente.
+The second command writes `evals/results/eval-<version>-<run-id>.json` and `.md` reports. Git ignores these files. Each report includes SHA-256 hashes of the dataset, configuration, and semantic rubric, plus the commit SHA and `gitDirty` when Git is available. `--verify-expectations` fails if the evaluator does not detect the expected failure codes. `--strict` fails on any global `fail` or `partial` result. The baseline includes adversarial cases and skips the semantic judge, so `--strict` is expected to fail initially.
 
-Para otro archivo: `npm run eval -- --input ruta/a/dataset.json --output ruta/de/salida`. El formato es el de `datasets/interview-cases.json`; cada caso lleva ID único, procedencia, turnos, consentimiento observado y esperado, temas requeridos y códigos de falla esperados. Incrementá `version` del dataset al modificar casos o expectativas. Incrementá las constantes de versión de los evaluadores y `config.json` al cambiar sus reglas o patrones.
+To use another file: `npm run eval -- --input ruta/a/dataset.json --output ruta/de/salida`. Follow the format in `datasets/interview-cases.json`: each case has a unique ID, source, turns, observed and expected consent status, required topics, and expected failure codes. Increment the dataset `version` when changing cases or expectations. Increment the evaluator version constants and the version in `config.json` when changing their rules or patterns.
 
-Para agregar un caso, copiá un objeto dentro de `cases`, cambiá el `id` y los turnos, declará `requiredTopics` usando claves de `config.json`, y anotá en `expectedFailureCodes` los códigos que debe detectar el evaluador. Por ejemplo, una entrevista correcta puede usar `"expectedFailureCodes": []`; una pregunta sobre edad, `"expectedFailureCodes": ["sensitive_question"]`. Ejecutá los tests y luego `--verify-expectations` para comprobar la anotación.
+To add a case, copy an object within `cases`, change its `id` and turns, set `requiredTopics` using keys from `config.json`, and list the failure codes the evaluator should detect in `expectedFailureCodes`. For example, a conformant interview can use `"expectedFailureCodes": []`; a question about age can use `"expectedFailureCodes": ["sensitive_question"]`. Run the tests and then `--verify-expectations` to check the annotation.
 
-El caso `no_acepto_current_bug` representa el comportamiento actual de `interfaces/web/src/main.tsx`: la búsqueda de `acepto` dentro de «No acepto» marca `granted`. Es una reproducción sintética del código actual, no una captura de una sesión real. La evaluación no modifica esa lógica.
+The `no_acepto_regression` case checks that "No acepto" sets consent to `declined` and that no question follows. It is a synthetic trace of the expected behavior, not a recording of a real session.
 
-## Juez semántico opcional
+## Optional Semantic Judge
 
-`EVAL_SEMANTIC_URL` habilita **LLM-as-a-judge** hacia un endpoint HTTP compatible con chat completions. Configurá también `EVAL_SEMANTIC_MODEL`; `EVAL_SEMANTIC_API_KEY` es opcional. Por ejemplo, un servidor local podría exponer ese endpoint. La rúbrica y el esquema de respuesta están en `src/evaluators/semantic.ts`; el reporte guarda el hash de la rúbrica exacta. El system prompt indica que la transcripción es dato no confiable y que deben ignorarse las instrucciones insertadas en ella. Esto reduce el riesgo de prompt injection, pero no lo elimina. El resultado `inconclusive` no se interpreta como aprobación. CI no configura estas variables.
+`EVAL_SEMANTIC_URL` enables an **LLM-as-a-judge** through an HTTP endpoint compatible with chat completions. Set `EVAL_SEMANTIC_MODEL` as well; `EVAL_SEMANTIC_API_KEY` is optional. A local server can provide this endpoint. The rubric and response schema are in `src/evaluators/semantic.ts`, and the report records the hash of the exact rubric. The system prompt treats transcripts as untrusted data and instructs the judge to ignore instructions within them. This reduces prompt-injection risk but does not eliminate it. An `inconclusive` result is not treated as approval. CI does not set these environment variables.
 
-## Interpretación
+## Interpret Results
 
-El JSON separa `deterministic`, `semantic` y `global` por caso. El estado global es `pass` sólo si ambos evaluadores aprueban, `fail` si alguno falla y `partial` si el determinístico aprueba pero el semántico está omitido o inconcluso. La tasa global cuenta sólo `pass`; `expectationMatches` mide si el evaluador reconoció las fallas sembradas en el dataset. La cobertura cuenta sólo los temas marcados como requeridos por caso. Las reglas de palabras clave pueden omitir paráfrasis o producir falsos positivos: un patrón contextual como `salud` puede aparecer en una pregunta laboral legítima. Revisá la evidencia y apoyá esos casos en evaluación semántica. No uses datos personales reales en datasets versionados ni en reportes compartidos.
+The JSON separates `deterministic`, `semantic`, and `global` results for each case. The global status is `pass` only when both evaluators pass, `fail` when either fails, and `partial` when the deterministic evaluator passes but the semantic evaluator is skipped or inconclusive. The global pass rate counts only `pass` results. `expectationMatches` measures whether the evaluator detected the failures seeded in the dataset. Topic coverage counts only topics marked as required for each case.
+
+Keyword rules can miss paraphrases or produce false positives: a contextual pattern such as `salud` may occur in a legitimate work-related question. Review the evidence and use semantic evaluation to support these cases. Do not put real personal information in versioned datasets or shared reports.

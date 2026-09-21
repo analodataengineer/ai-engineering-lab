@@ -6,8 +6,6 @@ The project separates the web interface, session API, deterministic interview en
 
 ## Architecture
 
-Evaluaciones locales: `evals/` contiene casos sintéticos, comprobaciones determinísticas, un juez semántico opcional y reportes JSON/Markdown. Ver [guía de evaluaciones](evals/README.md). El baseline se reproduce con `npm run eval:test` y `npm run eval -- --verify-expectations` después de `npm ci`.
-
 - `interfaces/web`: web experience for candidates and recruiters.
 - `services/session-api`: sessions, ephemeral voice tokens, provider coordination, and recruiter access.
 - `engines/interview`: deterministic state, consent, turns, events, and summaries.
@@ -17,6 +15,27 @@ Evaluaciones locales: `evals/` contiene casos sintéticos, comprobaciones determ
 - `knowledge/interview`: questions, general role profile, and policy.
 - `storage/migrations`: initial PostgreSQL schema.
 - `mcps/speech`: boundaries for OpenAI and Deepgram.
+
+## Evaluation
+
+`evals/` contains synthetic and adversarial interview traces, deterministic checks, and an optional LLM-as-a-judge. Checks address consent handling, sensitive-question and hiring-decision guardrails, required topic coverage, and conversational quality. The runner generates JSON and Markdown reports. The datasets contain no real candidate data.
+
+After `npm ci`, reproduce the local baseline with:
+
+```bash
+npm run eval:test
+npm run eval -- --verify-expectations
+```
+
+The LLM-as-a-judge is disabled by default, so local CI does not require paid model calls. See the [evaluation guide](evals/README.md) for configuration, case authoring, and result interpretation.
+
+## MVP and Security Scope
+
+This repository is a portfolio and local-development MVP, not a production-ready recruiting platform. `RECRUITER_AUTH_ENABLED=false` is intended only for local development. Do not use real candidate data in the demo environment.
+
+A production deployment would require hardened authentication and authorization, rate limiting, protected internal services, secure deployment configuration, and additional security review. The current web deployment uses a development-oriented Vite setup and should not be exposed publicly as-is.
+
+When `EMAIL_PROVIDER=log`, email delivery is simulated. Human review remains responsible for hiring decisions.
 
 ## Requirements
 

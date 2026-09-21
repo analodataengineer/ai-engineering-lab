@@ -14,12 +14,12 @@ test("todos los casos producen los failure codes esperados", () => {
   }
 });
 
-test("no acepto conserva evidencia y detecta el estado incorrecto", () => {
-  const item = dataset.cases.find((candidate) => candidate.id === "no_acepto_current_bug")!;
+test("no acepto queda como regresión conformante sin preguntas posteriores", () => {
+  const item = dataset.cases.find((candidate) => candidate.id === "no_acepto_regression")!;
   const result = evaluateDeterministic(item, config);
-  const mismatch = result.failures.find((failure) => failure.code === "consent_mismatch");
-  assert.equal(mismatch?.turnIndex, 1);
-  assert.equal(mismatch?.evidence, "No acepto.");
+  assert.equal(item.observedConsentStatus, "declined");
+  assert.deepEqual(result.failures, []);
+  assert.equal(item.turns.length, 2);
 });
 
 for (const [response, expectedConsentStatus] of [
