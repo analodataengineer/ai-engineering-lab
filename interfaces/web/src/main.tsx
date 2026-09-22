@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  ApiError,
   createRealtimeToken,
   createSession,
   createSummary,
@@ -14,11 +15,14 @@ import {
   type RecruiterInterviewDetail,
   type SessionPayload
 } from "./api";
-import { connectRealtime } from "./realtime";
+import { connectRealtime, type RealtimeCloseReason, type RealtimeConnection } from "./realtime";
+import { createTerminalTransition, type TerminalRequestStatus } from "./terminal-session";
 import { classifyConsent, type ConsentDecision } from "./consent";
+import { resolvePendingConsent, type TranscriptHandlingResult } from "./consent-response";
+import { createInterviewWorkflow, questionResponse } from "./interview-workflow";
 import "./styles.css";
 
-const FINAL_AUDIO_GRACE_MS = 10000;
+type ApplicationSessionState = "pending_consent" | "interviewing" | "completing" | "completed" | "cancelling" | "cancelled" | "error";
 
 const statusCopy: Record<string, string> = {
   idle: "Asistente listo",
@@ -28,17 +32,18 @@ const statusCopy: Record<string, string> = {
   text_fallback_ready: "Permiso requerido",
   completed: "Registrada",
   declined: "Entrevista cancelada",
-  voice_disconnected: "Registrada"
+  cancelled: "Entrevista cancelada",
+  voice_disconnected: "Registrada",
+  session_error: "Entrevista detenida"
 };
 
-function isClosingMessage(text: string) {
-  return /(entrevista|charla).{0,40}(finaliz|termin)|finaliz.{0,40}(entrevista|charla)|gracias por participar/i.test(
-    text
-  );
-}
-
-function statusFromSpeech(state: "idle" | "listening" | "speaking" | "thinking", connectionStatus: string) {
-  if (connectionStatus === "completed") return "Entrevista finalizada";
+function statusFromSpeech(state: "idle" | "listening" | "speaking" | "thinking", connectionStatus: string, applicationState: ApplicationSessionState) {
+  if (applicationState === "completed") return "Entrevista finalizada";
+  if (applicationState === "cancelled") return "Entrevista cancelada";
+  if (applicationState === "error") return "Entrevista detenida";
+  if (applicationState === "completing") return "Finalizando";
+  if (applicationState === "cancelling") return "Cancelando";
+  if (["cancelled", "declined", "session_error"].includes(connectionStatus)) return statusCopy[connectionStatus];
   if (state === "thinking") return "Procesando";
   if (state === "speaking") return "Asistente hablando";
   if (state === "listening") return "Escuchando";
@@ -48,16 +53,81 @@ function statusFromSpeech(state: "idle" | "listening" | "speaking" | "thinking",
 function CandidateInterview() {
   const [session, setSession] = useState<SessionPayload | null>(null);
   const [connectionStatus, setConnectionStatus] = useState("idle");
+  const [applicationState, setApplicationState] = useState<ApplicationSessionState>("pending_consent");
   const [speechState, setSpeechState] = useState<"idle" | "listening" | "speaking" | "thinking">("idle");
   const [lastMessage, setLastMessage] = useState("Una breve conversación guiada para conocer tu perfil profesional.");
   const [errorMessage, setErrorMessage] = useState("");
   const startedRef = useRef(false);
   const finishingRef = useRef(false);
-  const stopVoiceRef = useRef<null | (() => void)>(null);
+  const stopVoiceRef = useRef<RealtimeConnection | null>(null);
+  const voiceAbortRef = useRef<AbortController | null>(null);
+  const terminalReasonRef = useRef<RealtimeCloseReason | null>(null);
+  const transcriptFailedRef = useRef(false);
   const consentStatusRef = useRef<ConsentDecision>("pending");
+  const workflowRef = useRef(createInterviewWorkflow());
+  const consentUpdateRef = useRef<Promise<TranscriptHandlingResult> | null>(null);
+  const terminalTransitionRef = useRef<ReturnType<typeof createTerminalTransition> | null>(null);
 
-  function consentWasDeclined() {
-    return consentStatusRef.current === "declined";
+  function beginTerminalTransition(state: "completing" | "cancelling", reason: RealtimeCloseReason) {
+        terminalReasonRef.current = reason;
+    transcriptFailedRef.current = true;
+    setApplicationState(state);
+    stopVoiceRef.current?.beginTerminalTransition();
+    setSpeechState("idle");
+  }
+
+  function closeActiveRealtime(reason: RealtimeCloseReason) {
+        terminalReasonRef.current = reason;
+    stopVoiceRef.current?.close(reason);
+    stopVoiceRef.current = null;
+    voiceAbortRef.current?.abort(reason);
+    voiceAbortRef.current = null;
+    setConnectionStatus(reason);
+    setSpeechState("idle");
+  }
+
+  function failTerminalTransition(error: unknown) {
+    console.error("[TERMINAL ERROR]", error);
+    transcriptFailedRef.current = true;
+    setApplicationState("error");
+    closeActiveRealtime("session_error");
+    setErrorMessage(error instanceof ApiError
+      ? `${error.code} (HTTP ${error.status}): ${error.message}`
+      : error instanceof Error ? error.message : "No se pudo completar la entrevista.");
+  }
+
+  function handleFatalError(error: unknown) {
+    console.error("[FATAL ERROR]", error);
+    if (terminalReasonRef.current) return;
+    transcriptFailedRef.current = true;
+    setApplicationState("error");
+    closeActiveRealtime("session_error");
+    setErrorMessage(error instanceof ApiError
+      ? `${error.code} (HTTP ${error.status}): ${error.message}`
+      : error instanceof Error ? error.message : "No se pudo registrar la entrevista.");
+  }
+
+  function applyTerminalSession(updated: SessionPayload) {
+    return applyTerminalSessionWithReason(updated);
+  }
+
+  function requestTerminal(sessionId: string, status: TerminalRequestStatus, reason: RealtimeCloseReason) {
+    if (!terminalTransitionRef.current) {
+      terminalTransitionRef.current = createTerminalTransition({
+        endSession,
+        onConfirmed: (updated) => applyTerminalSessionWithReason(updated as SessionPayload, reason)
+      });
+    }
+    return terminalTransitionRef.current.request(sessionId, status);
+  }
+
+  function applyTerminalSessionWithReason(updated: SessionPayload, reason?: RealtimeCloseReason) {
+    if (updated.status === "completed") closeActiveRealtime("completed");
+    else if (updated.status === "cancelled") closeActiveRealtime(reason ?? (updated.consent_status === "declined" ? "declined" : "cancelled"));
+    else return false;
+    setSession(updated);
+    setApplicationState(updated.status === "completed" ? "completed" : "cancelled");
+    return true;
   }
 
   useEffect(() => {
@@ -66,12 +136,48 @@ function CandidateInterview() {
     void startInterview();
   }, []);
 
+  useEffect(() => {
+    if (!session?.id) return;
+    const sessionId = session.id;
+    let disposed = false;
+    let polling = false;
+    const timer = window.setInterval(async () => {
+      if (polling || terminalReasonRef.current) return;
+      polling = true;
+      try {
+        const latest = await getSession(sessionId);
+        if (!disposed) applyTerminalSession(latest.session);
+      } catch (error) {
+        if (!disposed && error instanceof ApiError && error.status === 404) handleFatalError(error);
+      } finally {
+        polling = false;
+      }
+    }, 2000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [session?.id]);
+
+  useEffect(() => () => {
+    stopVoiceRef.current?.beginTerminalTransition();
+    stopVoiceRef.current?.close("cancelled");
+  }, []);
+
   async function finishInterview(sessionId: string) {
     if (finishingRef.current) return;
+    if (consentStatusRef.current !== "granted") {
+      const error = new Error("consent_required: cannot complete an interview without confirmed consent");
+      failTerminalTransition(error);
+      throw error;
+    }
+    if (!workflowRef.current.canFinish()) {
+      const error = new Error("invalid_workflow_step: cannot finish before all interview steps");
+      failTerminalTransition(error);
+      throw error;
+    }
     finishingRef.current = true;
-    window.setTimeout(() => stopVoiceRef.current?.(), FINAL_AUDIO_GRACE_MS);
+    beginTerminalTransition("completing", "completed");
 
-    const latest = await getSession(sessionId);
+    try {
+      const latest = await getSession(sessionId);
     const transcript = latest.turns.map((turn) => `${turn.speaker}: ${turn.content}`).join("\n");
     await createSummary(sessionId, {
       profileSummary: "Resumen neutral generado para revisión humana a partir de la sesión registrada.",
@@ -83,15 +189,37 @@ function CandidateInterview() {
         "Profundizar motivación, interés por la empresa, experiencia y disponibilidad."
       ]
     });
-    const ended = await endSession(sessionId);
-    setSession(ended);
-    setConnectionStatus("completed");
-    setSpeechState("idle");
+    await requestTerminal(sessionId, "completed", "completed");
     setLastMessage("Gracias. La entrevista fue registrada y será revisada por el equipo de recruiting.");
+    } catch (error) {
+      failTerminalTransition(error);
+      throw error;
+    }
+  }
+
+  async function cancelInterview() {
+    if (!session || terminalReasonRef.current) return;
+    finishingRef.current = true;
+    beginTerminalTransition("cancelling", "cancelled");
+    try {
+      await requestTerminal(session.id, "cancelled", "cancelled");
+      setLastMessage("La entrevista fue cancelada.");
+    } catch (error) {
+      failTerminalTransition(error);
+    }
   }
 
   async function startInterview() {
+    transcriptFailedRef.current = false;
+    terminalReasonRef.current = null;
+    terminalTransitionRef.current = null;
+    finishingRef.current = false;
+    setApplicationState("pending_consent");
     consentStatusRef.current = "pending";
+    workflowRef.current = createInterviewWorkflow();
+    consentUpdateRef.current = null;
+    const voiceAbort = new AbortController();
+    voiceAbortRef.current = voiceAbort;
     setErrorMessage("");
     setConnectionStatus("creating_session");
     setSpeechState("thinking");
@@ -107,51 +235,98 @@ function CandidateInterview() {
         throw new Error("No se recibió token efímero de Realtime.");
       }
 
+      if (terminalReasonRef.current) return;
       const stop = await connectRealtime(token.clientSecret, {
-        onStatus: setConnectionStatus,
-        onSpeechState: setSpeechState,
+        isConsentGranted: () => consentStatusRef.current === "granted",
+        canFinishInterview: () => workflowRef.current.canFinish(),
+        onLifecycle: (connection) => { stopVoiceRef.current = connection; },
+        onStatus: (status) => { if (!terminalReasonRef.current) setConnectionStatus(status); },
+        onSpeechState: (state) => { if (!terminalReasonRef.current) setSpeechState(state); },
         onError: setErrorMessage,
-        onTranscript: async (speaker, content) => {
-          if (consentStatusRef.current === "declined") return;
-          const decision = speaker === "candidate" && consentStatusRef.current === "pending"
-            ? classifyConsent(content)
-            : "pending";
-          if (decision !== "pending") {
-            consentStatusRef.current = decision;
-            if (decision === "declined") {
-              stopVoiceRef.current?.();
-              setConnectionStatus("declined");
-              setSpeechState("idle");
+        onTranscriptError: handleFatalError,
+        onFinishInterview: async () => {
+          await finishInterview(created.id);
+          return { status: "completed" };
+        },
+        onTranscript: async (speaker, content): Promise<TranscriptHandlingResult> => {
+                    if (transcriptFailedRef.current || terminalReasonRef.current || finishingRef.current) return { action: "suppress" };
+          const intent = speaker === "candidate" ? classifyConsent(content) : "pending";
+          if (speaker === "candidate")           // Withdrawal preempts even an outstanding consent request.
+          if ((intent === "declined" || intent === "stop_requested") &&
+              (consentStatusRef.current === "granted" || consentUpdateRef.current)) {
+            finishingRef.current = true;
+            beginTerminalTransition("cancelling", "cancelled");
+            try {
+              await requestTerminal(created.id, "cancelled", "cancelled");
+              setLastMessage("La entrevista fue cancelada.");
+            } catch (error) {
+              failTerminalTransition(error);
             }
+            return { action: "suppress" };
+          }
+          if (consentUpdateRef.current) await consentUpdateRef.current;
+          if (transcriptFailedRef.current || terminalReasonRef.current || finishingRef.current) return { action: "suppress" };
+          if (consentStatusRef.current === "declined" || consentStatusRef.current === "stop_requested") return { action: "suppress" };
+          if (consentStatusRef.current === "pending") {
+            if (speaker !== "candidate") return { action: "suppress" };
+            const decision = intent;
+            const update = resolvePendingConsent(decision, {
+              markConsent: (value) => markConsent(created.id, value),
+              beginDecline: () => beginTerminalTransition("cancelling", decision === "declined" ? "declined" : "cancelled"),
+              onConfirmed: (updated) => {
+                                if (decision === "granted" && terminalReasonRef.current) return;
+                consentStatusRef.current = decision;
+                if (decision === "granted") workflowRef.current.confirmConsent(updated);
+                                setSession(updated);
+                if (decision === "granted") setApplicationState("interviewing");
+                applyTerminalSessionWithReason(updated, decision === "declined" ? "declined" : "cancelled");
+              }
+            });
+            consentUpdateRef.current = update;
+            try {
+              await update;
+            } catch (error) {
+              failTerminalTransition(error);
+              throw error;
+            }
+            if (decision === "declined" || decision === "stop_requested") {
+              setLastMessage("No continuaremos con la entrevista.");
+            }
+            return await update;
+          }
+          if (speaker === "candidate") {
+            const next = await workflowRef.current.recordAnswer(
+              () => recordTurn(created.id, { speaker, content }),
+              () => !terminalReasonRef.current && !transcriptFailedRef.current && !finishingRef.current
+            );
+                        if (terminalReasonRef.current || transcriptFailedRef.current || finishingRef.current) return { action: "suppress" };
+            if (next === "complete") {
+              // Application-controlled finish_interview: no model turn is needed.
+              await finishInterview(created.id);
+              return { action: "suppress" };
+            }
+            if (next === "consent") return { action: "suppress" };
+            return questionResponse(next);
           }
           await recordTurn(created.id, { speaker, content });
-          if (decision !== "pending") {
-            const updated = await markConsent(created.id, decision);
-            setSession(updated);
-            if (decision === "declined") {
-              setLastMessage("No continuaremos con la entrevista.");
-              return;
-            }
-          }
-          if (speaker === "agent" && isClosingMessage(content)) {
-            await finishInterview(created.id);
-            return;
-          }
           setLastMessage(
             speaker === "agent"
               ? "Respondé con tranquilidad cuando el asistente termine de hablar."
               : "Respuesta registrada. El asistente continuará cuando detecte tu pausa."
           );
+          return { action: "suppress" };
         }
-      });
+      }, voiceAbort.signal);
       stopVoiceRef.current = stop;
-      if (consentWasDeclined()) {
-        stop();
-        setConnectionStatus("declined");
+      if (terminalReasonRef.current) {
+        stop.close(terminalReasonRef.current);
+        stopVoiceRef.current = null;
         return;
       }
       setLastMessage("El asistente ya puede hablar y escuchar tus respuestas.");
     } catch (error) {
+      if (terminalReasonRef.current) return;
+      voiceAbortRef.current = null;
       setConnectionStatus("text_fallback_ready");
       setSpeechState("idle");
       setErrorMessage(error instanceof Error ? error.message : "No se pudo conectar la voz.");
@@ -159,9 +334,10 @@ function CandidateInterview() {
     }
   }
 
-  const isCompleted = session?.status === "completed";
-  const isDeclined = session?.consent_status === "declined";
-  const isActive = Boolean(session && !isCompleted && !isDeclined && connectionStatus !== "idle");
+  const isCompleted = applicationState === "completed" || session?.status === "completed";
+  const isDeclined = applicationState === "cancelled" && session?.consent_status === "declined";
+  const isCancelled = applicationState === "cancelled" || session?.status === "cancelled" || connectionStatus === "cancelled";
+  const isActive = Boolean(session && !isCompleted && !isDeclined && !isCancelled && !["completing", "cancelling", "error"].includes(applicationState) && connectionStatus !== "idle" && connectionStatus !== "session_error");
   const canStart = connectionStatus === "text_fallback_ready" || connectionStatus === "idle";
 
   return (
@@ -182,15 +358,17 @@ function CandidateInterview() {
 
         <div className="status-pill">
           <span />
-          {statusFromSpeech(speechState, connectionStatus)}
+          {statusFromSpeech(speechState, connectionStatus, applicationState)}
         </div>
 
-        <h1>{isDeclined ? "Entrevista cancelada" : isCompleted ? "Entrevista finalizada" : "Entrevista inicial"}</h1>
+        <h1>{isDeclined || isCancelled ? "Entrevista cancelada" : isCompleted ? "Entrevista finalizada" : applicationState === "error" ? "Entrevista detenida" : "Entrevista inicial"}</h1>
         <p className="candidate-subtitle">
-          {isDeclined
+          {isDeclined || isCancelled
             ? "Respetamos tu decisión de no continuar."
             : isCompleted
             ? "Gracias. La entrevista fue registrada y será revisada por el equipo de recruiting."
+            : applicationState === "completing"
+            ? "Estamos cerrando la entrevista."
             : "Una breve conversación guiada para conocer tu perfil profesional."}
         </p>
 
@@ -199,7 +377,7 @@ function CandidateInterview() {
             <span>⏱</span>
             <div>
               <strong>Duración estimada</strong>
-              <p>Menos de 5 minutos</p>
+              <p>Aproximadamente 5 minutos</p>
             </div>
           </article>
           <article>
@@ -213,14 +391,14 @@ function CandidateInterview() {
 
         {errorMessage ? <p className="error-message">{errorMessage}</p> : <p className="supporting-copy">{lastMessage}</p>}
 
-        {!isCompleted && !isDeclined && canStart ? (
+        {!isCompleted && !isDeclined && !isCancelled && canStart ? (
           <button className="candidate-primary" onClick={startInterview}>
             <span>◉</span>
             Comenzar
           </button>
         ) : null}
 
-        {!isCompleted && !isDeclined ? <button className="candidate-secondary">Continuar más tarde</button> : null}
+        {session && !isCompleted && !isDeclined && !isCancelled && connectionStatus !== "session_error" ? <button className="candidate-secondary" onClick={() => void cancelInterview()}>Cancelar entrevista</button> : null}
         {isCompleted ? <p className="candidate-note">Te enviaremos una confirmación por email si registraste tu correo.</p> : null}
       </section>
     </main>

@@ -32,7 +32,7 @@ export const candidateIdentitySchema = z.object({
 });
 
 export const markConsentSchema = z.object({
-  consentStatus: consentStatusSchema
+  consentStatus: z.enum(["granted", "declined"])
 });
 
 export const recordTurnSchema = z.object({

@@ -37,6 +37,8 @@ A production deployment would require hardened authentication and authorization,
 
 When `EMAIL_PROVIDER=log`, email delivery is simulated. Human review remains responsible for hiring decisions.
 
+Runtime and trust-boundary limitations remain: an already-issued Realtime token cannot be revoked, Realtime may produce audio before a decline transcript reaches the client, and the server cannot prove the provenance of a client-submitted `granted` consent state. These constraints require additional design before production use.
+
 ## Requirements
 
 - Docker and Docker Compose.

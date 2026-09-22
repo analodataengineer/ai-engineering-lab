@@ -1,4 +1,5 @@
 import { type Request, Router } from "express";
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 import {
   createEngineSession,
@@ -14,6 +15,7 @@ import {
 import { getSpeechProvider } from "../providers/index.js";
 
 const router = Router();
+const interviewPolicy = readFileSync(new URL("../../../../knowledge/interview/policy.md", import.meta.url), "utf8");
 
 const createSessionSchema = z.object({
   candidateFirstName: z.string().trim().min(1).max(80).optional(),
@@ -86,12 +88,16 @@ router.post("/", async (req, res, next) => {
 
 router.post("/:sessionId/realtime-token", async (req, res, next) => {
   try {
+    const current = await getEngineSession(req.params.sessionId);
+    if (current.session.consent_status === "declined" || ["completed", "cancelled", "failed"].includes(current.session.status)) {
+      res.status(409).json({ error: "invalid_session_state" });
+      return;
+    }
     const provider = getSpeechProvider();
     const token = await provider.createRealtimeSession({
       sessionId: req.params.sessionId,
       voice: req.body?.voice,
-      instructions:
-        "Sos un agente de entrevistas iniciales laborales en español rioplatense neutro. Al comenzar, saludá por voz, explicá que será una charla breve que no debería tomar más de 5 minutos, que registra información laboral para revisión humana y pedí consentimiento para continuar. Hacé una sola pregunta por turno. Esperá la respuesta antes de avanzar. Si la persona hace pausas, esperá con paciencia y no interrumpas. No preguntes datos sensibles, no puntúes, no apruebes ni rechaces candidatos. Si la persona acepta, seguí este orden: nombre y apellido, a qué correo podemos enviarle la confirmación de la entrevista, área o puesto de interés, experiencia relacionada, herramientas o tareas dominadas, una situación laboral desafiante, disponibilidad, qué la llevó a postularse al puesto y por qué eligió esta empresa. El correo es opcional: si no quiere compartirlo, seguí sin insistir. Si una respuesta es incompleta, hacé una repregunta breve. Después de la respuesta a por qué eligió esta empresa, agradecé, indicá que la entrevista finalizó y aclará que el resumen será revisado por una persona y no es una decisión final."
+      instructions: interviewPolicy
     });
     res.json(token);
   } catch (error) {
@@ -101,7 +107,8 @@ router.post("/:sessionId/realtime-token", async (req, res, next) => {
 
 router.post("/:sessionId/end", async (req, res, next) => {
   try {
-    const session = await endEngineSession(req.params.sessionId);
+    const { status } = z.object({ status: z.enum(["completed", "cancelled"]).default("completed") }).parse(req.body ?? {});
+    const session = await endEngineSession(req.params.sessionId, status);
     res.json(session);
   } catch (error) {
     next(error);

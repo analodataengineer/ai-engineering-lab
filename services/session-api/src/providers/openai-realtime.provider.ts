@@ -6,6 +6,19 @@ import type {
 
 type RealtimeClientSecretBody = Record<string, unknown>;
 
+const realtimeTools = [
+  {
+    type: "function",
+    name: "finish_interview",
+    description: "Signal that all required interview topics are covered and request application-level completion.",
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    }
+  }
+];
+
 function readClientSecret(body: RealtimeClientSecretBody) {
   const nestedSecret = body.client_secret as
     | { value?: string; expires_at?: number }
@@ -46,6 +59,7 @@ export class OpenAIRealtimeProvider implements SpeechProvider {
           type: "realtime",
           model: process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime",
           instructions: input.instructions,
+          tools: realtimeTools,
           output_modalities: ["audio"],
           audio: {
             input: {
@@ -56,8 +70,8 @@ export class OpenAIRealtimeProvider implements SpeechProvider {
               turn_detection: {
                 type: "semantic_vad",
                 eagerness: "low",
-                create_response: true,
-                interrupt_response: true
+                create_response: false,
+                interrupt_response: false
               },
               noise_reduction: {
                 type: "near_field"

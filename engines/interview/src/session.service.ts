@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { query } from "./db.js";
+import type { PoolClient } from "pg";
+import { pool, query } from "./db.js";
 import { sendThankYouEmail } from "./email/email.service.js";
+import { assertSessionCreationInput, SessionAccessError, withSessionAccess } from "./session-access.js";
 import type { ConsentStatus, SessionStatus } from "./schemas.js";
 
 export type InterviewSession = {
@@ -28,6 +30,7 @@ export async function createSession(input: {
   interviewToken?: string;
   targetRole?: string;
 }) {
+  assertSessionCreationInput(input);
   const id = randomUUID();
   const displayName =
     input.candidateDisplayName ??
@@ -69,51 +72,76 @@ export async function updateCandidateIdentity(
     candidateDisplayName?: string;
   }
 ) {
-  const displayName =
-    input.candidateDisplayName ??
-    [input.candidateFirstName, input.candidateLastName].filter(Boolean).join(" ") ??
-    null;
-  const result = await query<InterviewSession>(
-    `update interview_sessions
-     set candidate_first_name = coalesce($2, candidate_first_name),
-         candidate_last_name = coalesce($3, candidate_last_name),
-         candidate_display_name = coalesce($4, candidate_display_name),
-         updated_at = now()
-     where id = $1
-     returning *`,
-    [
-      sessionId,
-      input.candidateFirstName ?? null,
-      input.candidateLastName ?? null,
-      displayName || null
-    ]
+  return withSessionAccess(sessionId, "interview_data", (client) =>
+    writeCandidateIdentityLocked(client, sessionId, input)
   );
-  await recordEvent(sessionId, "candidate_identity_saved", input);
-  return result.rows[0] ?? null;
+}
+
+/** Internal write: the caller must hold the session row lock. */
+export async function writeCandidateIdentityLocked(
+  client: PoolClient,
+  sessionId: string,
+  input: { candidateFirstName?: string; candidateLastName?: string; candidateDisplayName?: string }
+) {
+    const displayName =
+      input.candidateDisplayName ??
+      [input.candidateFirstName, input.candidateLastName].filter(Boolean).join(" ") ??
+      null;
+    const result = await client.query<InterviewSession>(
+      `update interview_sessions
+       set candidate_first_name = coalesce($2, candidate_first_name),
+           candidate_last_name = coalesce($3, candidate_last_name),
+           candidate_display_name = coalesce($4, candidate_display_name),
+           updated_at = now()
+       where id = $1
+       returning *`,
+      [
+        sessionId,
+        input.candidateFirstName ?? null,
+        input.candidateLastName ?? null,
+        displayName || null
+      ]
+    );
+    await recordEvent(sessionId, "candidate_identity_saved", input, client);
+    return result.rows[0] ?? null;
 }
 
 export async function updateCandidateEmail(sessionId: string, candidateEmail: string) {
-  const result = await query<InterviewSession>(
-    `update interview_sessions
-     set candidate_email = $2, updated_at = now()
-     where id = $1
-     returning *`,
-    [sessionId, candidateEmail]
+  return withSessionAccess(sessionId, "interview_data", (client) =>
+    writeCandidateEmailLocked(client, sessionId, candidateEmail)
   );
-  await recordEvent(sessionId, "candidate_email_saved", { candidateEmail });
-  return result.rows[0] ?? null;
+}
+
+/** Internal write: the caller must hold the session row lock. */
+export async function writeCandidateEmailLocked(client: PoolClient, sessionId: string, candidateEmail: string) {
+    const result = await client.query<InterviewSession>(
+      `update interview_sessions
+       set candidate_email = $2, updated_at = now()
+       where id = $1
+       returning *`,
+      [sessionId, candidateEmail]
+    );
+    await recordEvent(sessionId, "candidate_email_saved", { candidateEmail }, client);
+    return result.rows[0] ?? null;
 }
 
 export async function updateTargetRole(sessionId: string, targetRole: string) {
-  const result = await query<InterviewSession>(
-    `update interview_sessions
-     set target_role = coalesce(target_role, $2), updated_at = now()
-     where id = $1
-     returning *`,
-    [sessionId, targetRole]
+  return withSessionAccess(sessionId, "interview_data", (client) =>
+    writeTargetRoleLocked(client, sessionId, targetRole)
   );
-  await recordEvent(sessionId, "target_role_saved", { targetRole });
-  return result.rows[0] ?? null;
+}
+
+/** Internal write: the caller must hold the session row lock. */
+export async function writeTargetRoleLocked(client: PoolClient, sessionId: string, targetRole: string) {
+    const result = await client.query<InterviewSession>(
+      `update interview_sessions
+       set target_role = coalesce(target_role, $2), updated_at = now()
+       where id = $1
+       returning *`,
+      [sessionId, targetRole]
+    );
+    await recordEvent(sessionId, "target_role_saved", { targetRole }, client);
+    return result.rows[0] ?? null;
 }
 
 export async function getSession(sessionId: string) {
@@ -164,36 +192,53 @@ export async function markConsent(sessionId: string, consentStatus: ConsentStatu
     consentStatus === "granted" ? "in_progress" : "cancelled";
   const result = await query<InterviewSession>(
     `update interview_sessions
-     set consent_status = $2, status = $3, updated_at = now()
+     set consent_status = $2,
+         status = $3,
+         ended_at = case when $2 = 'declined' then coalesce(ended_at, now()) else ended_at end,
+         updated_at = now()
      where id = $1 and status in ('consent_pending', 'created')
      returning *`,
     [sessionId, consentStatus, nextStatus]
   );
-  await recordEvent(sessionId, "consent_marked", { consentStatus });
-  return result.rows[0] ?? null;
-}
-
-export async function endSession(sessionId: string, status: "completed" | "cancelled" = "completed") {
-  const result = await query<InterviewSession>(
-    `update interview_sessions
-     set status = $2,
-         ended_at = coalesce(ended_at, now()),
-         completed_at = case when $2 = 'completed' then coalesce(completed_at, now()) else completed_at end,
-         updated_at = now()
-     where id = $1 and status not in ('completed', 'cancelled', 'failed')
-     returning *`,
-    [sessionId, status]
-  );
-  await recordEvent(sessionId, "session_ended", { status });
-  const session = result.rows[0] ?? (await getSession(sessionId));
-  if (session && status === "completed") {
-    await sendThankYouEmail(session);
+  const session = result.rows[0];
+  if (!session) {
+    const existing = await query("select 1 from interview_sessions where id = $1", [sessionId]);
+    throw new SessionAccessError(existing.rows.length ? "invalid_session_state" : "session_not_found", existing.rows.length ? 409 : 404);
   }
+  await recordEvent(sessionId, "consent_marked", { consentStatus });
   return session;
 }
 
-export async function recordEvent(sessionId: string, eventType: string, payload: unknown) {
-  await query(
+export async function endSession(sessionId: string, status: "completed" | "cancelled" = "completed") {
+  const outcome = await withSessionAccess(sessionId, status === "completed" ? "complete" : "cancel", async (client, current) => {
+    if (current.status === status) {
+      const existing = await client.query<InterviewSession>("select * from interview_sessions where id = $1", [sessionId]);
+      return { session: existing.rows[0], transitioned: false };
+    }
+    const result = await client.query<InterviewSession>(
+      `update interview_sessions
+       set status = $2,
+           ended_at = coalesce(ended_at, now()),
+           completed_at = case when $2 = 'completed' then coalesce(completed_at, now()) else completed_at end,
+           updated_at = now()
+       where id = $1 and (
+         ($2 = 'completed' and consent_status = 'granted' and status = 'in_progress') or
+         ($2 = 'cancelled' and status in ('created', 'consent_pending', 'in_progress'))
+       )
+       returning *`,
+      [sessionId, status]
+    );
+    const session = result.rows[0];
+    if (!session) throw new SessionAccessError("invalid_session_state", 409);
+    await recordEvent(sessionId, "session_ended", { status }, client);
+    return { session, transitioned: true };
+  });
+  if (status === "completed" && outcome.transitioned) await sendThankYouEmail(outcome.session);
+  return outcome.session;
+}
+
+export async function recordEvent(sessionId: string, eventType: string, payload: unknown, client: PoolClient | typeof pool = pool) {
+  await client.query(
     `insert into interview_events (session_id, event_type, payload_json)
      values ($1, $2, $3::jsonb)`,
     [sessionId, eventType, JSON.stringify(payload ?? {})]

@@ -1,5 +1,11 @@
 const engineBaseUrl = process.env.INTERVIEW_ENGINE_URL ?? "http://interview-engine:3002";
 
+export class EngineRequestError extends Error {
+  constructor(public readonly statusCode: number, public readonly code: string) {
+    super(code);
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${engineBaseUrl}${path}`, {
     ...init,
@@ -11,7 +17,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(`engine_request_failed: ${detail}`);
+    let code = "engine_request_failed";
+    try {
+      const body = JSON.parse(detail) as { error?: string };
+      if (typeof body.error === "string") code = body.error;
+    } catch { /* Keep a stable error code for non-JSON responses. */ }
+    throw new EngineRequestError(response.status, code);
   }
 
   return (await response.json()) as T;
@@ -25,7 +36,7 @@ export function createEngineSession(input: unknown) {
 }
 
 export function getEngineSession(sessionId: string) {
-  return request(`/sessions/${sessionId}`);
+  return request<{ session: { status: string; consent_status: string } }>(`/sessions/${sessionId}`);
 }
 
 export function listEngineSessions() {
@@ -40,10 +51,10 @@ export function getRecruiterInterviewDetail(sessionId: string) {
   return request(`/recruiter/interviews/${sessionId}`);
 }
 
-export function endEngineSession(sessionId: string) {
+export function endEngineSession(sessionId: string, status: "completed" | "cancelled" = "completed") {
   return request(`/sessions/${sessionId}/end`, {
     method: "POST",
-    body: JSON.stringify({ status: "completed" })
+    body: JSON.stringify({ status })
   });
 }
 

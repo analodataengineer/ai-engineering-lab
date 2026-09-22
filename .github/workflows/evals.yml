@@ -16,5 +16,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run test:consent -w interfaces/web
+      - run: npm run test:lifecycle -w interfaces/web
+      - run: npm run test:access -w engines/interview
       - run: npm run eval:test
       - run: npm run eval -- --verify-expectations

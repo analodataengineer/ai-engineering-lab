@@ -1,5 +1,16 @@
 const sessionApiUrl = import.meta.env.VITE_SESSION_API_URL ?? "http://localhost:3001";
 
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    public readonly body: string,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
 export type SessionPayload = {
   id: string;
   status: string;
@@ -121,7 +132,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(await response.text());
+    const body = await response.text();
+    let code = "request_failed";
+    let message = body || `HTTP ${response.status}`;
+    try {
+      const parsed = JSON.parse(body) as { error?: unknown; message?: unknown };
+      if (typeof parsed.error === "string") code = parsed.error;
+      if (typeof parsed.message === "string") message = parsed.message;
+      else if (typeof parsed.error === "string") message = parsed.error;
+    } catch { /* Preserve the raw response body. */ }
+    throw new ApiError(response.status, code, body, message);
   }
 
   return (await response.json()) as T;
@@ -175,10 +195,10 @@ export function createSummary(sessionId: string, input: {
   });
 }
 
-export function endSession(sessionId: string) {
+export function endSession(sessionId: string, status: "completed" | "cancelled" = "completed") {
   return request<SessionPayload>(`/sessions/${sessionId}/end`, {
     method: "POST",
-    body: JSON.stringify({})
+    body: JSON.stringify({ status })
   });
 }
 

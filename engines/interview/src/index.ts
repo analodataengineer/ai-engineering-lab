@@ -1,6 +1,7 @@
 import "dotenv/config";
 import cors from "cors";
 import express from "express";
+import { z } from "zod";
 import {
   candidateEmailSchema,
   candidateIdentitySchema,
@@ -22,6 +23,7 @@ import {
   updateCandidateEmail
 } from "./session.service.js";
 import { query } from "./db.js";
+import { SessionAccessError } from "./session-access.js";
 
 const app = express();
 app.use(cors());
@@ -91,10 +93,6 @@ app.post("/sessions/:sessionId/consent", async (req, res, next) => {
   try {
     const input = markConsentSchema.parse(req.body);
     const session = await markConsent(req.params.sessionId, input.consentStatus);
-    if (!session) {
-      res.status(409).json({ error: "invalid_consent_transition" });
-      return;
-    }
     res.json(session);
   } catch (error) {
     next(error);
@@ -151,7 +149,8 @@ app.post("/sessions/:sessionId/summary", async (req, res, next) => {
 
 app.post("/sessions/:sessionId/end", async (req, res, next) => {
   try {
-    const session = await endSession(req.params.sessionId, req.body?.status ?? "completed");
+    const { status } = z.object({ status: z.enum(["completed", "cancelled"]).default("completed") }).parse(req.body ?? {});
+    const session = await endSession(req.params.sessionId, status);
     res.json(session);
   } catch (error) {
     next(error);
@@ -159,6 +158,10 @@ app.post("/sessions/:sessionId/end", async (req, res, next) => {
 });
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (error instanceof SessionAccessError) {
+    res.status(error.statusCode).json({ error: error.code });
+    return;
+  }
   console.error(error);
   res.status(400).json({ error: "invalid_request" });
 });

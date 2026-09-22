@@ -7,6 +7,7 @@ COPY interfaces/web/package.json interfaces/web/package.json
 COPY services/session-api/package.json services/session-api/package.json
 COPY engines/interview/package.json engines/interview/package.json
 COPY agents/interview-agent/package.json agents/interview-agent/package.json
+COPY evals/package.json evals/package.json
 RUN npm install
 
 COPY interfaces/web interfaces/web

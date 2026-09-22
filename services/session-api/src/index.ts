@@ -3,6 +3,7 @@ import cors from "cors";
 import express from "express";
 import recruiterRouter from "./routes/recruiter.js";
 import sessionsRouter from "./routes/sessions.js";
+import { EngineRequestError } from "./engine-client.js";
 
 const app = express();
 app.use(cors());
@@ -16,6 +17,10 @@ app.use("/sessions", sessionsRouter);
 app.use("/recruiter", recruiterRouter);
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (error instanceof EngineRequestError) {
+    res.status(error.statusCode).json({ error: error.code });
+    return;
+  }
   console.error(error);
   res.status(400).json({ error: "invalid_request" });
 });

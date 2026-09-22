@@ -5,7 +5,9 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx src/index.ts",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test:access": "tsx --test tests/session-access.test.ts tests/consent-services.test.ts",
+    "test": "npm run test:access"
   },
   "dependencies": {
     "cors": "^2.8.5",
