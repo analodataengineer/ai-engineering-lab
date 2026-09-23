@@ -5,7 +5,9 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx src/index.ts",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test:observability": "tsx --test tests/observability.test.ts",
+    "test:provider": "tsx --test tests/provider.test.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

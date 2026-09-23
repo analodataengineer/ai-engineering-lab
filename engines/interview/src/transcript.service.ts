@@ -3,6 +3,7 @@ import type { PoolClient } from "pg";
 import type { Speaker } from "./schemas.js";
 import { writeCandidateEmailLocked, writeCandidateIdentityLocked, writeTargetRoleLocked } from "./session.service.js";
 import { withSessionAccess } from "./session-access.js";
+import { observability } from "./observability.js";
 
 export type InterviewTurn = {
   id: string;
@@ -18,24 +19,42 @@ export async function recordTurn(
   sessionId: string,
   input: { speaker: Speaker; content: string; audioRef?: string }
 ) {
-  return withSessionAccess(sessionId, "interview_data", async (client) => {
-    const previousAgentTurn = await getPreviousAgentTurn(client, sessionId);
-    const result = await client.query<InterviewTurn>(
-      `with next_index as (
-        select coalesce(max(turn_index), 0) + 1 as value
-        from interview_turns
-        where session_id = $1
-      )
-      insert into interview_turns (session_id, turn_index, speaker, content, audio_ref)
-      select $1, value, $2, $3, $4 from next_index
-      returning *`,
-      [sessionId, input.speaker, input.content, input.audioRef ?? null]
-    );
-    if (input.speaker === "candidate") {
-      await captureStructuredFields(client, sessionId, input.content, previousAgentTurn?.content ?? "");
-    }
-    return result.rows[0];
+  const span = observability.startSpan("turn.persisted", {
+    sessionId,
+    component: "interview-engine",
+    operation: "record_turn",
+    role: input.speaker
   });
+  let result;
+  try {
+    result = await withSessionAccess(sessionId, "interview_data", async (client) => {
+      const previousAgentTurn = await getPreviousAgentTurn(client, sessionId);
+      const result = await client.query<InterviewTurn>(
+        `with next_index as (
+          select coalesce(max(turn_index), 0) + 1 as value
+          from interview_turns
+          where session_id = $1
+        )
+        insert into interview_turns (session_id, turn_index, speaker, content, audio_ref)
+        select $1, value, $2, $3, $4 from next_index
+        returning *`,
+        [sessionId, input.speaker, input.content, input.audioRef ?? null]
+      );
+      if (input.speaker === "candidate") {
+        await captureStructuredFields(client, sessionId, input.content, previousAgentTurn?.content ?? "");
+      }
+      return result.rows[0];
+    });
+  } catch (error) {
+    span.recordError({
+      errorCode: error instanceof Error && "code" in error ? String((error as { code?: unknown }).code) : "turn_persistence_failed",
+      httpStatus: error instanceof Error && "statusCode" in error ? Number((error as { statusCode?: unknown }).statusCode) : 500,
+      safeMessage: "turn_persistence_failed"
+    });
+    throw error;
+  }
+  span.end({ status: "persisted", success: true });
+  return result;
 }
 
 export async function listTurns(sessionId: string) {

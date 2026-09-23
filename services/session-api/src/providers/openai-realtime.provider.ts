@@ -47,6 +47,7 @@ export class OpenAIRealtimeProvider implements SpeechProvider {
       throw new Error("OPENAI_API_KEY is required");
     }
 
+    const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime";
     const response = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
       method: "POST",
       headers: {
@@ -57,7 +58,7 @@ export class OpenAIRealtimeProvider implements SpeechProvider {
       body: JSON.stringify({
         session: {
           type: "realtime",
-          model: process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime",
+          model,
           instructions: input.instructions,
           tools: realtimeTools,
           output_modalities: ["audio"],
@@ -96,6 +97,7 @@ export class OpenAIRealtimeProvider implements SpeechProvider {
     return {
       provider: this.name,
       sessionId: input.sessionId,
+      model,
       clientSecret,
       expiresAt,
       raw: body

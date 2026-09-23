@@ -11,6 +11,7 @@ import {
   getSession,
   markConsent,
   recordTurn,
+  sendTelemetry,
   type RecruiterDashboard,
   type RecruiterInterviewDetail,
   type SessionPayload
@@ -67,6 +68,11 @@ function CandidateInterview() {
   const workflowRef = useRef(createInterviewWorkflow());
   const consentUpdateRef = useRef<Promise<TranscriptHandlingResult> | null>(null);
   const terminalTransitionRef = useRef<ReturnType<typeof createTerminalTransition> | null>(null);
+  const consentStartedAtRef = useRef<number | null>(null);
+
+  function emitTelemetry(sessionId: string | undefined, event: Parameters<typeof sendTelemetry>[1]) {
+    if (sessionId) void sendTelemetry(sessionId, event);
+  }
 
   function beginTerminalTransition(state: "completing" | "cancelling", reason: RealtimeCloseReason) {
         terminalReasonRef.current = reason;
@@ -105,6 +111,7 @@ function CandidateInterview() {
     setErrorMessage(error instanceof ApiError
       ? `${error.code} (HTTP ${error.status}): ${error.message}`
       : error instanceof Error ? error.message : "No se pudo registrar la entrevista.");
+    emitTelemetry(session?.id, { name: "terminal.begin", state: "error", reason: "session_error" });
   }
 
   function applyTerminalSession(updated: SessionPayload) {
@@ -226,21 +233,25 @@ function CandidateInterview() {
 
     const created = await createSession({});
     setSession(created);
+    consentStartedAtRef.current = performance.now();
+    emitTelemetry(created.id, { name: "consent.requested" });
     setLastMessage("Conectando con el asistente de voz...");
 
     try {
       setConnectionStatus("requesting_microphone");
       const token = await createRealtimeToken(created.id);
-      if (!token.clientSecret) {
+      if (!token.clientSecret || !token.model) {
         throw new Error("No se recibió token efímero de Realtime.");
       }
 
       if (terminalReasonRef.current) return;
       const stop = await connectRealtime(token.clientSecret, {
+        model: token.model,
         isConsentGranted: () => consentStatusRef.current === "granted",
         canFinishInterview: () => workflowRef.current.canFinish(),
         onLifecycle: (connection) => { stopVoiceRef.current = connection; },
         onStatus: (status) => { if (!terminalReasonRef.current) setConnectionStatus(status); },
+        onOperationalEvent: (event) => emitTelemetry(created.id, event),
         onSpeechState: (state) => { if (!terminalReasonRef.current) setSpeechState(state); },
         onError: setErrorMessage,
         onTranscriptError: handleFatalError,
@@ -253,7 +264,8 @@ function CandidateInterview() {
           const intent = speaker === "candidate" ? classifyConsent(content) : "pending";
           if (speaker === "candidate")           // Withdrawal preempts even an outstanding consent request.
           if ((intent === "declined" || intent === "stop_requested") &&
-              (consentStatusRef.current === "granted" || consentUpdateRef.current)) {
+            (consentStatusRef.current === "granted" || consentUpdateRef.current)) {
+            emitTelemetry(created.id, { name: "withdrawal.detected", classification: "withdrawal" });
             finishingRef.current = true;
             beginTerminalTransition("cancelling", "cancelled");
             try {
@@ -270,13 +282,28 @@ function CandidateInterview() {
           if (consentStatusRef.current === "pending") {
             if (speaker !== "candidate") return { action: "suppress" };
             const decision = intent;
+            emitTelemetry(created.id, {
+              name: "consent.classified",
+              classification: decision === "stop_requested" ? "withdrawal" : decision === "pending" ? "ambiguous" : decision
+            });
             const update = resolvePendingConsent(decision, {
               markConsent: (value) => markConsent(created.id, value),
               beginDecline: () => beginTerminalTransition("cancelling", decision === "declined" ? "declined" : "cancelled"),
               onConfirmed: (updated) => {
                                 if (decision === "granted" && terminalReasonRef.current) return;
                 consentStatusRef.current = decision;
-                if (decision === "granted") workflowRef.current.confirmConsent(updated);
+                if (decision === "granted") {
+                  workflowRef.current.confirmConsent(updated);
+                  emitTelemetry(created.id, {
+                    name: "consent.granted",
+                    durationMs: consentStartedAtRef.current === null ? undefined : performance.now() - consentStartedAtRef.current
+                  });
+                } else {
+                  emitTelemetry(created.id, {
+                    name: "consent.declined",
+                    durationMs: consentStartedAtRef.current === null ? undefined : performance.now() - consentStartedAtRef.current
+                  });
+                }
                                 setSession(updated);
                 if (decision === "granted") setApplicationState("interviewing");
                 applyTerminalSessionWithReason(updated, decision === "declined" ? "declined" : "cancelled");
@@ -295,11 +322,19 @@ function CandidateInterview() {
             return await update;
           }
           if (speaker === "candidate") {
+            const step = workflowRef.current.step;
+            emitTelemetry(created.id, { name: "workflow.step.started", step });
+            const stepStartedAt = performance.now();
             const next = await workflowRef.current.recordAnswer(
               () => recordTurn(created.id, { speaker, content }),
               () => !terminalReasonRef.current && !transcriptFailedRef.current && !finishingRef.current
             );
                         if (terminalReasonRef.current || transcriptFailedRef.current || finishingRef.current) return { action: "suppress" };
+            emitTelemetry(created.id, {
+              name: "workflow.step.completed",
+              step,
+              durationMs: performance.now() - stepStartedAt
+            });
             if (next === "complete") {
               // Application-controlled finish_interview: no model turn is needed.
               await finishInterview(created.id);

@@ -1,5 +1,6 @@
 import type { TranscriptHandlingResult } from "./consent-response";
 import { CONSENT_REQUEST } from "./interview-workflow";
+import { extractRealtimeUsage } from "./realtime-usage";
 
 export type RealtimeCloseReason = "completed" | "cancelled" | "declined" | "session_error";
 export type RealtimeConnection = {
@@ -12,6 +13,7 @@ export type RealtimeConnection = {
 type SpeechState = "idle" | "listening" | "speaking" | "thinking";
 
 type RealtimeHandlers = {
+  model: string;
   onLifecycle?: (connection: RealtimeConnection) => void;
   onStatus: (status: string) => void;
   isConsentGranted: () => boolean;
@@ -21,12 +23,35 @@ type RealtimeHandlers = {
   onFinishInterview?: (callId: string, argumentsJson: string) => Promise<unknown> | unknown;
   onSpeechState?: (state: SpeechState) => void;
   onError?: (message: string) => void;
+  onOperationalEvent?: (event: {
+    name: "realtime.connected" | "response.requested" | "response.completed" | "terminal.begin" | "microphone.stopped" | "realtime.closed";
+    reason?: RealtimeCloseReason;
+    durationMs?: number;
+    responseId?: string;
+    model?: string;
+    responseStatus?: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    inputUncachedTokens?: number;
+    inputCachedTokens?: number;
+    inputTextTokens?: number;
+    inputAudioTokens?: number;
+    inputTextCachedTokens?: number;
+    inputAudioCachedTokens?: number;
+    inputTextUncachedTokens?: number;
+    inputAudioUncachedTokens?: number;
+    outputTextTokens?: number;
+    outputAudioTokens?: number;
+    responseStartedAtMs?: number;
+    responseCompletedAtMs?: number;
+  }) => void;
 };
 
 export function createRealtimeLifecycle(
   peer: RTCPeerConnection,
   audio: HTMLAudioElement,
-  handlers: Pick<RealtimeHandlers, "onStatus" | "onSpeechState">,
+  handlers: Pick<RealtimeHandlers, "onStatus" | "onSpeechState" | "onOperationalEvent">,
   stopOutput: (channel: RTCDataChannel | null) => void = () => {},
   // Temporary diagnostics: read the connection's response state without owning it.
   readResponseInFlight: () => boolean | undefined = () => undefined
@@ -35,14 +60,18 @@ export function createRealtimeLifecycle(
   let channel: RTCDataChannel | null = null;
   let closed = false;
   let transitioning = false;
+  let terminalStartedAt: number | null = null;
 
   return {
     get closed() { return closed; },
     canProcess() { return !closed && !transitioning; },
     beginTerminalTransition() {
-            if (closed || transitioning) return;
+      if (closed || transitioning) return;
       transitioning = true;
+      terminalStartedAt = performance.now();
+      handlers.onOperationalEvent?.({ name: "terminal.begin" });
       stream?.getTracks().forEach((track) => track.stop());
+      handlers.onOperationalEvent?.({ name: "microphone.stopped" });
             audio.pause();
       stopOutput(channel);
       handlers.onSpeechState?.("idle");
@@ -72,6 +101,11 @@ export function createRealtimeLifecycle(
       channel = null;
       handlers.onSpeechState?.("idle");
       handlers.onStatus(reason);
+      handlers.onOperationalEvent?.({
+        name: "realtime.closed",
+        reason,
+        durationMs: terminalStartedAt === null ? undefined : performance.now() - terminalStartedAt
+      });
     }
   };
 }
@@ -82,6 +116,8 @@ export async function connectRealtime(clientSecret: string, handlers: RealtimeHa
   audio.autoplay = true;
   audio.setAttribute("playsinline", "true");
   let responseInFlight = false;
+  let responseStartedAt: number | null = null;
+  let responseStartedAtMs: number | null = null;
   const lifecycle = createRealtimeLifecycle(peer, audio, handlers, (activeChannel) => {
     if (activeChannel?.readyState !== "open") return;
     if (responseInFlight) {
@@ -123,6 +159,9 @@ export async function connectRealtime(clientSecret: string, handlers: RealtimeHa
         throw new Error("consent_required: normal Realtime response blocked without confirmed consent");
       }
       responseInFlight = true;
+      responseStartedAt = performance.now();
+      responseStartedAtMs = Date.now();
+      handlers.onOperationalEvent?.({ name: "response.requested" });
             channel.send(JSON.stringify({
         type: "response.create",
         response: {
@@ -136,6 +175,7 @@ export async function connectRealtime(clientSecret: string, handlers: RealtimeHa
       if (!lifecycle.canProcess() || greetingRequested) return;
       greetingRequested = true;
       handlers.onStatus("voice_connected");
+      handlers.onOperationalEvent?.({ name: "realtime.connected" });
       handlers.onSpeechState?.("speaking");
       pendingResponses.push({ action: "greeting" });
       sendNextResponse();
@@ -197,7 +237,32 @@ export async function connectRealtime(clientSecret: string, handlers: RealtimeHa
         handlers.onSpeechState?.("speaking");
       }
       if (payload.type === "response.done") {
+        const usage = extractRealtimeUsage(payload);
         responseInFlight = false;
+        handlers.onOperationalEvent?.({
+          name: "response.completed",
+          durationMs: responseStartedAt === null ? undefined : performance.now() - responseStartedAt,
+          responseId: usage?.responseId,
+          model: handlers.model,
+          responseStatus: usage?.status,
+          inputTokens: usage?.inputTokens,
+          outputTokens: usage?.outputTokens,
+          totalTokens: usage?.totalTokens,
+          inputUncachedTokens: usage?.inputUncachedTokens,
+          inputCachedTokens: usage?.inputCachedTokens,
+          inputTextTokens: usage?.inputTextTokens,
+          inputAudioTokens: usage?.inputAudioTokens,
+          inputTextCachedTokens: usage?.inputTextCachedTokens,
+          inputAudioCachedTokens: usage?.inputAudioCachedTokens,
+          inputTextUncachedTokens: usage?.inputTextUncachedTokens,
+          inputAudioUncachedTokens: usage?.inputAudioUncachedTokens,
+          outputTextTokens: usage?.outputTextTokens,
+          outputAudioTokens: usage?.outputAudioTokens,
+          responseStartedAtMs: responseStartedAtMs ?? undefined,
+          responseCompletedAtMs: Date.now()
+        });
+        responseStartedAt = null;
+        responseStartedAtMs = null;
         handlers.onSpeechState?.("listening");
         sendNextResponse();
       }

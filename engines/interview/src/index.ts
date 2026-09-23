@@ -1,4 +1,5 @@
 import "dotenv/config";
+import "./instrumentation.js";
 import cors from "cors";
 import express from "express";
 import { z } from "zod";
@@ -24,6 +25,7 @@ import {
 } from "./session.service.js";
 import { query } from "./db.js";
 import { SessionAccessError } from "./session-access.js";
+import { observability } from "./observability.js";
 
 const app = express();
 app.use(cors());
@@ -157,12 +159,27 @@ app.post("/sessions/:sessionId/end", async (req, res, next) => {
   }
 });
 
-app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const sessionId = typeof req.params.sessionId === "string" ? req.params.sessionId : "unknown";
   if (error instanceof SessionAccessError) {
+    observability.recordError("request.rejected", {
+      sessionId,
+      component: "interview-engine",
+      errorCode: error.code,
+      httpStatus: error.statusCode,
+      safeMessage: error.code
+    });
     res.status(error.statusCode).json({ error: error.code });
     return;
   }
-  console.error(error);
+  observability.recordError("engine.request.failed", {
+    sessionId,
+    component: "interview-engine",
+    errorCode: "invalid_request",
+    httpStatus: 400,
+    safeMessage: "invalid_request"
+  });
+  console.error(error instanceof Error ? error.message : "request_failed");
   res.status(400).json({ error: "invalid_request" });
 });
 

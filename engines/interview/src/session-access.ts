@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { pool } from "./db.js";
 import type { ConsentStatus, SessionStatus } from "./schemas.js";
+import { observability } from "./observability.js";
 
 export type SessionAccessState = {
   status: SessionStatus;
@@ -66,7 +67,23 @@ export async function withSessionAccess<T>(
       [sessionId]
     );
     const session = result.rows[0] ?? null;
-    assertSessionOperationAllowed(session, operation);
+    try {
+      assertSessionOperationAllowed(session, operation);
+    } catch (error) {
+      if (error instanceof SessionAccessError) {
+        observability.recordError("request.rejected", {
+          sessionId,
+          component: "interview-engine",
+          operation,
+          errorCode: error.code,
+          httpStatus: error.statusCode,
+          sessionStatus: session?.status,
+          consentStatus: session?.consent_status,
+          safeMessage: error.code
+        });
+      }
+      throw error;
+    }
     const output = await action(client, session!);
     await client.query("COMMIT");
     return output;

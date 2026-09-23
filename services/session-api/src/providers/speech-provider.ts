@@ -7,6 +7,7 @@ export type CreateRealtimeSessionInput = {
 export type CreateRealtimeSessionOutput = {
   provider: "openai" | "deepgram";
   sessionId: string;
+  model?: string;
   clientSecret?: string;
   expiresAt?: number;
   raw?: unknown;

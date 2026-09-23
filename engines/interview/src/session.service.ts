@@ -4,6 +4,7 @@ import { pool, query } from "./db.js";
 import { sendThankYouEmail } from "./email/email.service.js";
 import { assertSessionCreationInput, SessionAccessError, withSessionAccess } from "./session-access.js";
 import type { ConsentStatus, SessionStatus } from "./schemas.js";
+import { observability } from "./observability.js";
 
 export type InterviewSession = {
   id: string;
@@ -32,6 +33,11 @@ export async function createSession(input: {
 }) {
   assertSessionCreationInput(input);
   const id = randomUUID();
+  const span = observability.startSpan("session.created", {
+    sessionId: id,
+    component: "interview-engine",
+    operation: "create_session"
+  });
   const displayName =
     input.candidateDisplayName ??
     [input.candidateFirstName, input.candidateLastName].filter(Boolean).join(" ") ??
@@ -61,6 +67,7 @@ export async function createSession(input: {
     ]
   );
   await recordEvent(id, "session_created", input);
+  span.end({ sessionStatus: "consent_pending", consentStatus: "pending", success: true });
   return result.rows[0];
 }
 
@@ -188,53 +195,85 @@ export async function listSessions() {
 }
 
 export async function markConsent(sessionId: string, consentStatus: ConsentStatus) {
+  const span = observability.startSpan("consent.persisted", {
+    sessionId,
+    component: "interview-engine",
+    operation: "mark_consent",
+    consentStatus
+  });
   const nextStatus: SessionStatus =
     consentStatus === "granted" ? "in_progress" : "cancelled";
-  const result = await query<InterviewSession>(
-    `update interview_sessions
-     set consent_status = $2,
-         status = $3,
-         ended_at = case when $2 = 'declined' then coalesce(ended_at, now()) else ended_at end,
-         updated_at = now()
-     where id = $1 and status in ('consent_pending', 'created')
-     returning *`,
-    [sessionId, consentStatus, nextStatus]
-  );
-  const session = result.rows[0];
-  if (!session) {
-    const existing = await query("select 1 from interview_sessions where id = $1", [sessionId]);
-    throw new SessionAccessError(existing.rows.length ? "invalid_session_state" : "session_not_found", existing.rows.length ? 409 : 404);
+  try {
+    const result = await query<InterviewSession>(
+      `update interview_sessions
+       set consent_status = $2,
+           status = $3,
+           ended_at = case when $2 = 'declined' then coalesce(ended_at, now()) else ended_at end,
+           updated_at = now()
+       where id = $1 and status in ('consent_pending', 'created')
+       returning *`,
+      [sessionId, consentStatus, nextStatus]
+    );
+    const session = result.rows[0];
+    if (!session) {
+      const existing = await query("select 1 from interview_sessions where id = $1", [sessionId]);
+      throw new SessionAccessError(existing.rows.length ? "invalid_session_state" : "session_not_found", existing.rows.length ? 409 : 404);
+    }
+    await recordEvent(sessionId, "consent_marked", { consentStatus });
+    span.end({ sessionStatus: session.status, success: true });
+    return session;
+  } catch (error) {
+    span.recordError({
+      errorCode: error instanceof SessionAccessError ? error.code : "consent_persistence_failed",
+      httpStatus: error instanceof SessionAccessError ? error.statusCode : 500,
+      safeMessage: "consent_persistence_failed"
+    });
+    throw error;
   }
-  await recordEvent(sessionId, "consent_marked", { consentStatus });
-  return session;
 }
 
 export async function endSession(sessionId: string, status: "completed" | "cancelled" = "completed") {
-  const outcome = await withSessionAccess(sessionId, status === "completed" ? "complete" : "cancel", async (client, current) => {
-    if (current.status === status) {
-      const existing = await client.query<InterviewSession>("select * from interview_sessions where id = $1", [sessionId]);
-      return { session: existing.rows[0], transitioned: false };
-    }
-    const result = await client.query<InterviewSession>(
-      `update interview_sessions
-       set status = $2,
-           ended_at = coalesce(ended_at, now()),
-           completed_at = case when $2 = 'completed' then coalesce(completed_at, now()) else completed_at end,
-           updated_at = now()
-       where id = $1 and (
-         ($2 = 'completed' and consent_status = 'granted' and status = 'in_progress') or
-         ($2 = 'cancelled' and status in ('created', 'consent_pending', 'in_progress'))
-       )
-       returning *`,
-      [sessionId, status]
-    );
-    const session = result.rows[0];
-    if (!session) throw new SessionAccessError("invalid_session_state", 409);
-    await recordEvent(sessionId, "session_ended", { status }, client);
-    return { session, transitioned: true };
+  const span = observability.startSpan(status === "completed" ? "session.completed" : "session.cancelled", {
+    sessionId,
+    component: "interview-engine",
+    operation: "end_session",
+    sessionStatus: status
   });
-  if (status === "completed" && outcome.transitioned) await sendThankYouEmail(outcome.session);
-  return outcome.session;
+  try {
+    const outcome = await withSessionAccess(sessionId, status === "completed" ? "complete" : "cancel", async (client, current) => {
+      if (current.status === status) {
+        const existing = await client.query<InterviewSession>("select * from interview_sessions where id = $1", [sessionId]);
+        return { session: existing.rows[0], transitioned: false };
+      }
+      const result = await client.query<InterviewSession>(
+        `update interview_sessions
+         set status = $2,
+             ended_at = coalesce(ended_at, now()),
+             completed_at = case when $2 = 'completed' then coalesce(completed_at, now()) else completed_at end,
+             updated_at = now()
+         where id = $1 and (
+           ($2 = 'completed' and consent_status = 'granted' and status = 'in_progress') or
+           ($2 = 'cancelled' and status in ('created', 'consent_pending', 'in_progress'))
+         )
+         returning *`,
+        [sessionId, status]
+      );
+      const session = result.rows[0];
+      if (!session) throw new SessionAccessError("invalid_session_state", 409);
+      await recordEvent(sessionId, "session_ended", { status }, client);
+      return { session, transitioned: true };
+    });
+    if (status === "completed" && outcome.transitioned) await sendThankYouEmail(outcome.session);
+    span.end({ sessionStatus: outcome.session.status, success: true });
+    return outcome.session;
+  } catch (error) {
+    span.recordError({
+      errorCode: error instanceof SessionAccessError ? error.code : "terminal_transition_failed",
+      httpStatus: error instanceof SessionAccessError ? error.statusCode : 500,
+      safeMessage: "terminal_transition_failed"
+    });
+    throw error;
+  }
 }
 
 export async function recordEvent(sessionId: string, eventType: string, payload: unknown, client: PoolClient | typeof pool = pool) {

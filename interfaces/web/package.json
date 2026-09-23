@@ -7,6 +7,7 @@
     "build": "tsc -b && vite build",
     "test:consent": "tsx --test tests/consent.test.ts",
     "test:lifecycle": "tsx --test tests/realtime-lifecycle.test.ts tests/terminal-session.test.ts tests/interview-workflow.test.ts",
+    "test:usage": "tsx --test tests/realtime-usage.test.ts",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {

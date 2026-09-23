@@ -22,6 +22,48 @@ export type SessionPayload = {
   target_role?: string | null;
 };
 
+export type BrowserTelemetryEvent = {
+  name:
+    | "realtime.connected"
+    | "consent.requested"
+    | "consent.classified"
+    | "consent.granted"
+    | "consent.declined"
+    | "workflow.step.started"
+    | "workflow.step.completed"
+    | "response.requested"
+    | "response.completed"
+    | "withdrawal.detected"
+    | "terminal.begin"
+    | "microphone.stopped"
+    | "realtime.closed";
+  step?: string;
+  state?: string;
+  classification?: "granted" | "declined" | "ambiguous" | "withdrawal";
+  reason?: string;
+  provider?: string;
+  model?: string;
+  responseId?: string;
+  responseStatus?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  inputUncachedTokens?: number;
+  inputCachedTokens?: number;
+  inputTextTokens?: number;
+  inputAudioTokens?: number;
+  inputTextCachedTokens?: number;
+  inputAudioCachedTokens?: number;
+  inputTextUncachedTokens?: number;
+  inputAudioUncachedTokens?: number;
+  outputTextTokens?: number;
+  outputAudioTokens?: number;
+  responseStartedAtMs?: number;
+  responseCompletedAtMs?: number;
+  durationMs?: number;
+  success?: boolean;
+};
+
 export type TurnPayload = {
   id: string;
   speaker: "agent" | "candidate" | "system";
@@ -159,7 +201,7 @@ export function getSession(sessionId: string) {
 }
 
 export function createRealtimeToken(sessionId: string) {
-  return request<{ clientSecret?: string }>(`/sessions/${sessionId}/realtime-token`, {
+  return request<{ provider: string; sessionId: string; model: string; clientSecret?: string; expiresAt?: number }>(`/sessions/${sessionId}/realtime-token`, {
     method: "POST",
     body: JSON.stringify({})
   });
@@ -200,6 +242,17 @@ export function endSession(sessionId: string, status: "completed" | "cancelled" 
     method: "POST",
     body: JSON.stringify({ status })
   });
+}
+
+export async function sendTelemetry(sessionId: string, event: BrowserTelemetryEvent): Promise<void> {
+  try {
+    await request(`/sessions/${sessionId}/telemetry`, {
+      method: "POST",
+      body: JSON.stringify(event)
+    });
+  } catch (error) {
+    console.warn("browser telemetry unavailable", error instanceof ApiError ? error.code : "request_failed");
+  }
 }
 
 export function listRecruiterSessions(accessToken: string) {

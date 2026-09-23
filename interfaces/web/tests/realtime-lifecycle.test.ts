@@ -124,6 +124,7 @@ async function runtime(t: TestContext, options: {
   canFinishInterview?: () => boolean;
   finish?: (connection: RealtimeConnection) => Promise<void>;
   duringMedia?: (connection: RealtimeConnection) => Promise<void>;
+  operational?: (event: { name: string; model?: string }) => void;
 } = {}) {
   const sent: { type: string; response?: { instructions?: string; tool_choice?: string } }[] = [];
   const calls = { stopped: 0, peerClosed: 0, channelClosed: 0, transcripts: 0, finishes: 0 };
@@ -165,9 +166,11 @@ async function runtime(t: TestContext, options: {
     });
   }
   await connectRealtime("synthetic-secret", {
+    model: "test-realtime-model",
     isConsentGranted: options.isConsentGranted ?? (() => true),
     canFinishInterview: options.canFinishInterview ?? (() => true),
     onLifecycle: (value) => { connection = value; },
+    onOperationalEvent: options.operational,
     onStatus: (value) => states.push(value),
     onSpeechState: (value) => states.push(value),
     onTranscriptError: (error) => errors.push(error),
@@ -199,6 +202,22 @@ async function runtime(t: TestContext, options: {
   t.after(() => connection.close("cancelled"));
   return { connection, calls, errors, states, sent, emit, candidate, flush, abort };
 }
+
+test("response.completed uses the configured session model when response.done has another model", async (t) => {
+  const events: Array<{ name: string; model?: string }> = [];
+  const app = await runtime(t, { operational: (event) => events.push(event) });
+  app.emit({
+    type: "response.done",
+    response: {
+      id: "resp-model-source",
+      model: "incorrect-event-model",
+      status: "completed",
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }
+    }
+  });
+  const completed = events.find((event) => event.name === "response.completed");
+  assert.equal(completed?.model, "test-realtime-model");
+});
 
 test("normal candidate handler is awaited; duplicate turn creates exactly one response", async (t) => {
   const pending = deferred();

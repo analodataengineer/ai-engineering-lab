@@ -22,6 +22,10 @@ services:
       RECRUITER_ACCESS_TOKEN: ${RECRUITER_ACCESS_TOKEN}
       SESSION_API_PORT: 3001
       INTERVIEW_ENGINE_URL: http://interview-engine:3002
+      LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
     ports:
       - "3001:3001"
     depends_on:
@@ -37,6 +41,10 @@ services:
       INTERVIEW_ENGINE_PORT: 3002
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:-log}
       EMAIL_FROM: ${EMAIL_FROM:-Recruiting <no-reply@example.com>}
+      LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
     ports:
       - "3002:3002"
     depends_on:

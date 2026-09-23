@@ -21,5 +21,10 @@
   "devDependencies": {
     "@types/node": "^20.14.15",
     "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "@langfuse/otel": "^5.4.1",
+    "@langfuse/tracing": "^5.4.1",
+    "@opentelemetry/sdk-node": "^0.205.0"
   }
 }

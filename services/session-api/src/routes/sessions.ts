@@ -13,6 +13,7 @@ import {
   saveEngineCandidateEmail
 } from "../engine-client.js";
 import { getSpeechProvider } from "../providers/index.js";
+import { observability } from "../observability.js";
 
 const router = Router();
 const interviewPolicy = readFileSync(new URL("../../../../knowledge/interview/policy.md", import.meta.url), "utf8");
@@ -52,6 +53,72 @@ const summarySchema = z.object({
 
 const emailPattern = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 
+export function sanitizeRealtimeToken(token: {
+  provider: string;
+  sessionId: string;
+  model?: string;
+  clientSecret?: string;
+  expiresAt?: number;
+}) {
+  return {
+    provider: token.provider,
+    sessionId: token.sessionId,
+    model: token.model,
+    clientSecret: token.clientSecret,
+    expiresAt: token.expiresAt
+  };
+}
+
+export const telemetryEventSchema = z.object({
+  name: z.enum([
+    "realtime.connected", "consent.requested", "consent.classified", "consent.granted",
+    "consent.declined", "workflow.step.started", "workflow.step.completed", "response.requested",
+    "response.completed", "withdrawal.detected", "terminal.begin", "microphone.stopped", "realtime.closed"
+  ]),
+  step: z.string().trim().min(1).max(80).optional(),
+  state: z.string().trim().min(1).max(80).optional(),
+  classification: z.enum(["granted", "declined", "ambiguous", "withdrawal"]).optional(),
+  reason: z.string().trim().min(1).max(80).optional(),
+  provider: z.string().trim().min(1).max(80).optional(),
+  model: z.string().trim().min(1).max(120).optional(),
+  responseId: z.string().trim().min(1).max(160).optional(),
+  responseStatus: z.string().trim().min(1).max(80).optional(),
+  inputTokens: z.number().finite().int().nonnegative().max(10_000_000).optional(),
+  outputTokens: z.number().finite().int().nonnegative().max(10_000_000).optional(),
+  totalTokens: z.number().finite().int().nonnegative().max(20_000_000).optional(),
+  inputUncachedTokens: z.number().finite().int().nonnegative().max(10_000_000).optional(),
+  inputCachedTokens: z.number().finite().int().nonnegative().max(10_000_000).optional(),
+  inputTextTokens: z.number().finite().int().nonnegative().max(10_000_000).optional(),
+  inputAudioTokens: z.number().finite().int().nonnegative().max(10_000_000).optional(),
+  inputTextCachedTokens: z.number().finite().int().nonnegative().max(10_000_000).optional(),
+  inputAudioCachedTokens: z.number().finite().int().nonnegative().max(10_000_000).optional(),
+  inputTextUncachedTokens: z.number().finite().int().nonnegative().max(10_000_000).optional(),
+  inputAudioUncachedTokens: z.number().finite().int().nonnegative().max(10_000_000).optional(),
+  outputTextTokens: z.number().finite().int().nonnegative().max(10_000_000).optional(),
+  outputAudioTokens: z.number().finite().int().nonnegative().max(10_000_000).optional(),
+  responseStartedAtMs: z.number().finite().int().nonnegative().max(9_999_999_999_999).optional(),
+  responseCompletedAtMs: z.number().finite().int().nonnegative().max(9_999_999_999_999).optional(),
+  durationMs: z.number().finite().nonnegative().max(86_400_000).optional(),
+  success: z.boolean().optional()
+}).strict().refine((value) => {
+  if (value.inputTokens === undefined) return true;
+  const cached = value.inputCachedTokens ?? 0;
+  const uncached = value.inputUncachedTokens ?? value.inputTokens - cached;
+  return uncached >= 0 && uncached + cached === value.inputTokens;
+}, { path: ["inputUncachedTokens"], message: "input token buckets must equal inputTokens" }).refine((value) => {
+  if (value.inputTextCachedTokens === undefined || value.inputTextUncachedTokens === undefined || value.inputTextTokens === undefined) return true;
+  return value.inputTextCachedTokens + value.inputTextUncachedTokens === value.inputTextTokens;
+}, { path: ["inputTextCachedTokens"], message: "input text cached/uncached buckets must equal inputTextTokens" }).refine((value) => {
+  if (value.inputAudioCachedTokens === undefined || value.inputAudioUncachedTokens === undefined || value.inputAudioTokens === undefined) return true;
+  return value.inputAudioCachedTokens + value.inputAudioUncachedTokens === value.inputAudioTokens;
+}, { path: ["inputAudioCachedTokens"], message: "input audio cached/uncached buckets must equal inputAudioTokens" }).refine((value) => {
+  if (value.inputTextCachedTokens === undefined || value.inputAudioCachedTokens === undefined || value.inputCachedTokens === undefined) return true;
+  return value.inputTextCachedTokens + value.inputAudioCachedTokens === value.inputCachedTokens;
+}, { path: ["inputCachedTokens"], message: "input cached modality buckets must equal inputCachedTokens" }).refine((value) => {
+  if (value.responseStartedAtMs === undefined || value.responseCompletedAtMs === undefined) return true;
+  return value.responseCompletedAtMs >= value.responseStartedAtMs;
+}, { path: ["responseCompletedAtMs"], message: "responseCompletedAtMs must be >= responseStartedAtMs" });
+
 function requireRecruiterAccess(req: Request) {
   if (process.env.RECRUITER_AUTH_ENABLED !== "true") {
     return true;
@@ -80,6 +147,13 @@ router.post("/", async (req, res, next) => {
   try {
     const input = createSessionSchema.parse(req.body ?? {});
     const session = await createEngineSession(input);
+    observability.event("session.created", {
+      sessionId: session.id,
+      component: "session-api",
+      state: session.status,
+      consentStatus: session.consent_status,
+      success: true
+    });
     res.status(201).json(session);
   } catch (error) {
     next(error);
@@ -87,6 +161,11 @@ router.post("/", async (req, res, next) => {
 });
 
 router.post("/:sessionId/realtime-token", async (req, res, next) => {
+  const span = observability.startSpan("realtime.token.created", {
+    sessionId: req.params.sessionId,
+    component: "session-api",
+    operation: "create_realtime_token"
+  });
   try {
     const current = await getEngineSession(req.params.sessionId);
     if (current.session.consent_status === "declined" || ["completed", "cancelled", "failed"].includes(current.session.status)) {
@@ -99,7 +178,74 @@ router.post("/:sessionId/realtime-token", async (req, res, next) => {
       voice: req.body?.voice,
       instructions: interviewPolicy
     });
-    res.json(token);
+    span.end({ provider: token.provider, model: token.model, httpStatus: 200, success: true });
+    res.json(sanitizeRealtimeToken(token));
+  } catch (error) {
+    span.recordError({ errorCode: error instanceof Error ? "realtime_token_failed" : "realtime_token_failed", httpStatus: 400, safeMessage: "realtime_token_failed" });
+    next(error);
+  }
+});
+
+router.post("/:sessionId/telemetry", async (req, res, next) => {
+  try {
+    const event = telemetryEventSchema.parse(req.body ?? {});
+    const current = await getEngineSession(req.params.sessionId);
+    observability.event("browser.telemetry.received", {
+      sessionId: req.params.sessionId,
+      component: "session-api",
+      operation: event.name,
+      state: event.state,
+      step: event.step,
+      classification: event.classification,
+      reason: event.reason,
+      provider: event.provider,
+      model: event.model,
+      responseId: event.responseId,
+      responseStatus: event.responseStatus,
+      durationMs: event.durationMs,
+      success: event.success ?? true,
+      sessionStatus: current.session.status,
+      consentStatus: current.session.consent_status
+    });
+    observability.event(event.name, {
+      sessionId: req.params.sessionId,
+      component: "web",
+      step: event.step,
+      state: event.state,
+      classification: event.classification,
+      reason: event.reason,
+      provider: event.provider,
+      model: event.model,
+      responseId: event.responseId,
+      responseStatus: event.responseStatus,
+      durationMs: event.durationMs,
+      success: event.success
+    });
+    if (event.name === "response.completed" && (event.inputTokens !== undefined || event.outputTokens !== undefined || event.totalTokens !== undefined)) {
+      observability.generation("realtime.generation", {
+        sessionId: req.params.sessionId,
+        responseId: event.responseId,
+        model: event.model,
+        responseStatus: event.responseStatus,
+        responseStartedAtMs: event.responseStartedAtMs,
+        responseCompletedAtMs: event.responseCompletedAtMs,
+        durationMs: event.durationMs,
+        inputTokens: event.inputTokens,
+        inputUncachedTokens: event.inputUncachedTokens ?? (event.inputTokens ?? 0) - (event.inputCachedTokens ?? 0),
+        inputCachedTokens: event.inputCachedTokens ?? 0,
+        outputTokens: event.outputTokens,
+        totalTokens: event.totalTokens,
+        inputTextTokens: event.inputTextTokens,
+        inputAudioTokens: event.inputAudioTokens,
+        inputTextCachedTokens: event.inputTextCachedTokens,
+        inputAudioCachedTokens: event.inputAudioCachedTokens,
+        inputTextUncachedTokens: event.inputTextUncachedTokens,
+        inputAudioUncachedTokens: event.inputAudioUncachedTokens,
+        outputTextTokens: event.outputTextTokens,
+        outputAudioTokens: event.outputAudioTokens
+      });
+    }
+    res.status(202).json({ accepted: true });
   } catch (error) {
     next(error);
   }

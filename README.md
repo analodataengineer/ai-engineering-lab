@@ -1,157 +1,466 @@
 # AI Recruitment Screening Platform
 
-Portable MVP of a voice-based conversational agent for initial candidate interviews, with a recruiter-facing platform for reviewing interview results and candidate information.
+## Overview
 
-The project separates the web interface, session API, deterministic interview engine, agent definition, skills, routines, knowledge base, and storage. The agent does not approve, reject, or score candidates. It conducts a short interview and produces neutral information for human review.
+AI Recruitment Screening Platform is a voice-based system for conducting short initial candidate interviews and making the resulting information available for recruiter review.
+
+The platform combines a browser-based voice experience, OpenAI Realtime, deterministic interview workflow control, backend session enforcement, PostgreSQL persistence, recruiter review, automated tests, and offline evaluation.
+
+The system does not score, rank, approve, or reject candidates. Interview information is presented for human review.
+
+## Current Status
+
+### Implemented
+
+- OpenAI Realtime voice interviews over WebRTC.
+- Application-owned consent and interview workflow.
+- Rule-based consent and withdrawal handling.
+- Backend session-state and consent enforcement.
+- PostgreSQL persistence for sessions, turns, events, candidate details, basic neutral summaries, and email events.
+- Microphone and Realtime cleanup on interview completion or cancellation.
+- Recruiter dashboard and interview-detail views.
+- Synthetic and adversarial evaluation datasets.
+- Automated CI validation with GitHub Actions.
+- Runtime observability with optional Langfuse/OpenTelemetry telemetry.
+
+### In Development
+
+- Structured recruiter-facing summaries.
+- Recruiter data normalization and UI improvements.
 
 ## Architecture
 
-- `interfaces/web`: web experience for candidates and recruiters.
-- `services/session-api`: sessions, ephemeral voice tokens, provider coordination, and recruiter access.
-- `engines/interview`: deterministic state, consent, turns, events, and summaries.
-- `agents/interview-agent`: agent definition, tools, schemas, and guardrails.
-- `skills/interview`: documented reusable capabilities.
-- `routines/interview`: `default-interview` workflow.
-- `knowledge/interview`: questions, general role profile, and policy.
-- `storage/migrations`: initial PostgreSQL schema.
-- `mcps/speech`: boundaries for OpenAI and Deepgram.
+The active application runtime is:
+
+```text
+Candidate / Recruiter Web
+interfaces/web
+        |
+        | REST
+        v
+Session API
+services/session-api
+        |
+        v
+Interview Engine
+engines/interview
+        |
+        v
+PostgreSQL
+```
+
+The voice path is:
+
+```text
+Candidate Browser
+      |
+      | WebRTC
+      v
+OpenAI Realtime
+```
+
+The Session API creates an ephemeral Realtime client secret. The browser uses that secret to establish the WebRTC connection with OpenAI Realtime while the OpenAI API key remains server-side.
+
+### Main Components
+
+- `interfaces/web`: candidate interview experience and recruiter interface.
+- `services/session-api`: session creation and management, ephemeral Realtime tokens, recruiter access, and communication with the Interview Engine.
+- `engines/interview`: session state, consent enforcement, turns, summaries, events, and persistence logic.
+- `storage/migrations`: PostgreSQL migrations.
+- `knowledge/interview/policy.md`: shared interview policy.
+- `evals`: synthetic and adversarial interview evaluation framework.
+
+## Interview Flow
+
+The active interview workflow is implemented in:
+
+```text
+interfaces/web/src/interview-workflow.ts
+```
+
+The current sequence is:
+
+```text
+consent
+→ name
+→ email_optional
+→ target_role
+→ experience
+→ tools
+→ challenge
+→ availability
+→ motivation
+→ company_reason
+→ complete
+```
+
+The application owns the workflow state and determines which question comes next.
+
+For each step:
+
+1. The application selects the canonical question.
+2. The question is sent to the voice model.
+3. The candidate response is processed.
+4. The validated answer is persisted.
+5. The workflow advances exactly one step.
+
+The model does not independently choose the interview sequence or add follow-up questions.
+
+After the final answer is persisted, the application transitions the session directly to completion.
+
+The interview is designed to take approximately five minutes. The current time budget is informational and does not enforce a hard timeout or skip required steps.
+
+## Consent and Session Control
+
+Consent is handled before the interview workflow is unlocked.
+
+The application uses deterministic rules to identify:
+
+- explicit consent;
+- explicit refusal;
+- ambiguous responses;
+- withdrawal during an active interview.
+
+Ambiguous responses keep the session in the consent phase and trigger clarification.
+
+Before protected interview data can be written, the backend verifies:
+
+```text
+consent_status = granted
+```
+
+and validates the current session state.
+
+Protected writes use PostgreSQL transactions with a session-row lock so state validation and persistence remain coordinated.
+
+Invalid session operations return structured errors such as:
+
+```text
+404 session_not_found
+409 invalid_session_state
+```
+
+Completion and cancellation transitions are conditional and idempotent to avoid duplicate terminal side effects.
+
+## Realtime Voice Runtime
+
+The active voice provider is OpenAI Realtime over WebRTC.
+
+The runtime uses semantic VAD for speech detection.
+
+Automatic model response creation is disabled. The application explicitly sends:
+
+```text
+response.create
+```
+
+after a validated candidate turn.
+
+This keeps response generation coordinated with the application-owned workflow.
+
+When a terminal transition begins, the browser:
+
+- stops microphone tracks;
+- prevents additional transcript processing;
+- cancels an active response when necessary;
+- clears buffered output audio;
+- closes the Realtime data channel;
+- closes the peer connection;
+- detaches media references.
+
+Cleanup is idempotent so multiple terminal signals converge on the same final state.
+
+## Observability
+
+The platform includes a minimal, optional runtime observability layer built with Langfuse and OpenTelemetry:
+
+```text
+Candidate Browser
+      |
+      | allowlisted operational telemetry
+      v
+Session API
+      |
+      v
+Interview Engine
+      |
+      v
+Langfuse
+```
+
+The existing `sessionId` is the primary correlation key across observations. Realtime generation telemetry records the configured model, native latency, response status, token usage, and text/audio token breakdowns. Cached and uncached usage is normalized into mutually exclusive buckets so the same tokens are not counted twice. The usage shape is prepared for multimodal pricing; monetary cost calculation requires a matching Langfuse Model Definition and is not provided by the application.
+
+Telemetry is content-free: transcripts, prompts, audio, candidate answers, names, emails, tokens, and request bodies are excluded. Langfuse credentials remain server-side. Configuration is optional and uses the variables documented in [`.env.example`](.env.example); when disabled or unavailable, observability fails open and does not interrupt the interview.
+
+See [`docs/observability.md`](docs/observability.md) for event taxonomy, usage normalization, privacy rules, and setup details.
+
+## Persistence and Recruiter Review
+
+The Interview Engine persists interview information in PostgreSQL.
+
+Stored information includes:
+
+- interview sessions;
+- consent status;
+- session lifecycle status;
+- candidate turns;
+- agent turns;
+- lifecycle and domain events;
+- candidate identity;
+- optional email;
+- target role;
+- neutral summaries;
+- email events.
+
+The recruiter interface provides access to:
+
+- dashboard metrics;
+- recent interviews;
+- candidate information;
+- interview status;
+- transcript;
+- summary;
+- email-related events.
+
+The current summary implementation is deterministic and based on persisted session information.
 
 ## Evaluation
 
-`evals/` contains synthetic and adversarial interview traces, deterministic checks, and an optional LLM-as-a-judge. Checks address consent handling, sensitive-question and hiring-decision guardrails, required topic coverage, and conversational quality. The runner generates JSON and Markdown reports. The datasets contain no real candidate data.
+The `evals/` module evaluates interview behavior independently from the application runtime.
 
-After `npm ci`, reproduce the local baseline with:
+It includes:
+
+- synthetic interview traces;
+- adversarial cases;
+- deterministic evaluators;
+- expected outcomes;
+- optional semantic LLM evaluation;
+- JSON reports;
+- Markdown reports.
+
+Current evaluation areas include:
+
+- consent handling;
+- sensitive-question guardrails;
+- hiring-decision language;
+- required topic coverage;
+- multi-question behavior;
+- closing behavior;
+- human-review expectations;
+- conversational quality.
+
+The semantic LLM judge is optional and disabled by default.
+
+Run the evaluation suite with:
 
 ```bash
+npm ci
 npm run eval:test
 npm run eval -- --verify-expectations
 ```
 
-The LLM-as-a-judge is disabled by default, so local CI does not require paid model calls. See the [evaluation guide](evals/README.md) for configuration, case authoring, and result interpretation.
+See:
 
-## MVP and Security Scope
+```text
+evals/README.md
+```
 
-This repository is a portfolio and local-development MVP, not a production-ready recruiting platform. `RECRUITER_AUTH_ENABLED=false` is intended only for local development. Do not use real candidate data in the demo environment.
+for evaluation configuration and dataset authoring.
 
-A production deployment would require hardened authentication and authorization, rate limiting, protected internal services, secure deployment configuration, and additional security review. The current web deployment uses a development-oriented Vite setup and should not be exposed publicly as-is.
+### Tests, Evals and Observability
 
-When `EMAIL_PROVIDER=log`, email delivery is simulated. Human review remains responsible for hiring decisions.
+These concerns are kept separate:
 
-Runtime and trust-boundary limitations remain: an already-issued Realtime token cannot be revoked, Realtime may produce audio before a decline transcript reaches the client, and the server cannot prove the provenance of a client-submitted `granted` consent state. These constraints require additional design before production use.
+```text
+Tests
+→ software and runtime correctness
 
-## Requirements
+Evals
+→ interview behavior and policy conformance
 
-- Docker and Docker Compose.
-- `OPENAI_API_KEY` for voice with OpenAI Realtime.
-- `RECRUITER_AUTH_ENABLED=false` for local development without recruiter authentication.
-- `RECRUITER_ACCESS_TOKEN` to protect the recruiter screen when `RECRUITER_AUTH_ENABLED=true`.
-- `EMAIL_PROVIDER=log` to simulate thank-you emails without an external email provider.
+Observability
+→ runtime operational visibility
+```
+
+Observability provides operational events and Realtime generation telemetry. More advanced dashboards and production operations remain future work.
+
+## Continuous Integration
+
+GitHub Actions provides automated CI through:
+
+```text
+.github/workflows/evals.yml
+```
+
+The workflow runs:
+
+```text
+monorepo build
+web consent tests
+web lifecycle/workflow tests
+Interview Engine tests
+evaluation tests
+evaluation expectation verification
+```
 
 ## Run Locally
 
-1. Create a `.env` file from `.env.example`.
-2. Set `OPENAI_API_KEY`.
-3. Keep `RECRUITER_AUTH_ENABLED=false` for local development, or set `RECRUITER_AUTH_ENABLED=true` and define a `RECRUITER_ACCESS_TOKEN`.
-4. Keep `EMAIL_PROVIDER=log` for local development.
-5. Run:
+### Requirements
+
+- Docker
+- Docker Compose
+- OpenAI API key
+
+Create the environment file:
 
 ```bash
-docker compose up --build
+cp .env.example .env
 ```
 
-Services:
+Set:
 
-- Candidate app: `http://localhost:5173`
-- Recruiter app: `http://localhost:5173/recruiter`
-- Session API: `http://localhost:3001`
-- Interview Engine: `http://localhost:3002`
-
-## Candidate Flow
-
-1. The candidate opens `http://localhost:5173`.
-2. The interview attempts to start automatically.
-3. The browser requests microphone permission.
-4. The agent greets the candidate, explains that the conversation should take no more than 5 minutes, and asks for consent.
-5. The agent asks for the candidate’s first and last name.
-6. The agent may ask for an optional email address to send a confirmation.
-7. The agent asks about the position or area of interest and continues the job-related flow.
-8. After the final question, the agent closes the conversation.
-9. The session is stored for recruiter review.
-
-The candidate screen does not display the transcript or summary.
-
-## Recruiter Flow
-
-1. Open `http://localhost:5173/recruiter`.
-2. Enter the value of `RECRUITER_ACCESS_TOKEN`.
-3. Review KPIs, funnel information, recent interviews, and email automation.
-4. Open `View details` on an interview to see identity, email, role, summary, transcript, and email events.
-
-If `RECRUITER_AUTH_ENABLED=false`, recruiter endpoints do not require a token for local development.
-
-If `RECRUITER_AUTH_ENABLED=true`, recruiter endpoints require:
-
-```http
-Authorization: Bearer <RECRUITER_ACCESS_TOKEN>
+```env
+OPENAI_API_KEY=your_key
 ```
 
-The `GET /recruiter/dashboard` endpoint uses the same token and returns the dashboard aggregates.
-
-The `GET /recruiter/interviews/:sessionId` endpoint returns the real interview details.
-
-## Automated Email
-
-When a session moves to `completed`, the engine attempts to send a thank-you email if `candidate_email` exists.
-
-For local development:
+For the current email implementation:
 
 ```env
 EMAIL_PROVIDER=log
 ```
 
-The `log` provider does not send real emails. It logs the recipient, subject, and idempotency key in the `interview-engine` logs.
+Recruiter access can be protected with:
 
-Idempotency uses:
-
-```text
-session_id + thank_you_email
+```env
+RECRUITER_AUTH_ENABLED=true
+RECRUITER_ACCESS_TOKEN=your_token
 ```
 
-If the candidate email is missing, an internal event is recorded and the interview closing flow is not blocked.
+Start the platform:
+
+```bash
+docker compose up --build
+```
+
+Available services:
+
+```text
+Candidate app     http://localhost:5173
+Recruiter app     http://localhost:5173/recruiter
+Session API       http://localhost:3001
+Interview Engine  http://localhost:3002
+```
+
+Open the candidate application and allow microphone access when requested to start the voice interview flow.
+
+The recruiter interface is available at:
+
+```text
+http://localhost:5173/recruiter
+```
 
 ## Main Endpoints
 
-- `GET /health`
-- `POST /sessions`
-- `GET /sessions` with recruiter token
-- `POST /sessions/:sessionId/realtime-token`
-- `POST /sessions/:sessionId/end`
-- `GET /sessions/:sessionId`
-- `POST /sessions/:sessionId/consent`
-- `POST /sessions/:sessionId/turns`
-- `POST /sessions/:sessionId/summary`
-- `POST /sessions/:sessionId/candidate-email`
-- `POST /sessions/:sessionId/candidate-identity`
-- `GET /recruiter/dashboard`
-- `GET /recruiter/interviews/:sessionId`
-
-## Invitation-Ready Model
-
-`interview_sessions` includes an `interview_token` with a partial unique index. This prepares the data model for future links such as:
+### Sessions
 
 ```text
-/interview/:token
+GET  /health
+POST /sessions
+GET  /sessions
+GET  /sessions/:sessionId
 ```
 
-The complete email invitation flow is outside the scope of the current MVP.
+### Interview Runtime
 
-## Extension Points
+```text
+POST /sessions/:sessionId/realtime-token
+POST /sessions/:sessionId/consent
+POST /sessions/:sessionId/turns
+POST /sessions/:sessionId/summary
+POST /sessions/:sessionId/candidate-email
+POST /sessions/:sessionId/candidate-identity
+POST /sessions/:sessionId/end
+```
 
-- Change questions in `knowledge/interview/question-bank.json`.
-- Adjust policies in `knowledge/interview/policy.md`.
-- Modify the flow in `routines/interview/default-interview.routine.md`.
-- Implement Deepgram by completing `services/session-api/src/providers/deepgram.provider.ts`.
-- Add formal recruiter authentication before using the platform in production.
-- Implement SMTP or Resend as a real email provider.
-- Implement real invitations using `interview_token`.
-- Add manual status changes by recruiters.
+### Recruiter
+
+```text
+GET /recruiter/dashboard
+GET /recruiter/interviews/:sessionId
+```
+
+## Reference Components
+
+The repository also contains components that are not part of the active browser voice runtime.
+
+### Agents SDK
+
+```text
+agents/interview-agent
+```
+
+Contains an alternative/reference Agents SDK agent definition, tools, schemas, and instructions.
+
+The current voice interview does not execute through this agent.
+
+### Skills
+
+```text
+skills/interview
+```
+
+Contains documented reusable interview capabilities.
+
+### Routines
+
+```text
+routines/interview
+```
+
+Contains interview workflow documentation.
+
+The active workflow state machine is implemented in:
+
+```text
+interfaces/web/src/interview-workflow.ts
+```
+
+### Knowledge
+
+```text
+knowledge/interview/question-bank.json
+knowledge/interview/role-profiles
+```
+
+These files provide reference knowledge.
+
+The canonical questions used by the active browser runtime are defined by the interview workflow.
+
+### Speech Providers
+
+```text
+mcps/speech
+```
+
+Contains speech-provider boundary documentation.
+
+The active provider implementation is OpenAI Realtime.
+
+The current Deepgram provider:
+
+```text
+services/session-api/src/providers/deepgram.provider.ts
+```
+
+is an integration stub and is not part of the active runtime.
+
+## Next Additions
+
+- Advanced runtime observability and operational dashboards.
+- Structured recruiter summaries.
+- Recruiter data and UI improvements.
+- Browser session resume and recovery.
+- Real email delivery.
+- Invitation flow.
+- Configurable runtime question source.
+- Alternative speech provider support.

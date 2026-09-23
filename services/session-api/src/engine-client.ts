@@ -1,3 +1,5 @@
+import { observability } from "./observability.js";
+
 const engineBaseUrl = process.env.INTERVIEW_ENGINE_URL ?? "http://interview-engine:3002";
 
 export class EngineRequestError extends Error {
@@ -7,13 +9,25 @@ export class EngineRequestError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${engineBaseUrl}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    }
+  const sessionId = path.match(/^\/sessions\/([^/]+)/)?.[1] ?? "unknown";
+  const span = observability.startSpan("engine.request", {
+    sessionId,
+    component: "session-api",
+    operation: `${init?.method ?? "GET"} ${path.split("?")[0]}`
   });
+  let response: Response;
+  try {
+    response = await fetch(`${engineBaseUrl}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {})
+      }
+    });
+  } catch (error) {
+    span.recordError({ errorCode: "engine_unreachable", httpStatus: 503, safeMessage: "engine_unreachable" });
+    throw error;
+  }
 
   if (!response.ok) {
     const detail = await response.text();
@@ -22,14 +36,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const body = JSON.parse(detail) as { error?: string };
       if (typeof body.error === "string") code = body.error;
     } catch { /* Keep a stable error code for non-JSON responses. */ }
+    span.recordError({ errorCode: code, httpStatus: response.status, safeMessage: code });
     throw new EngineRequestError(response.status, code);
   }
-
+  span.end({ httpStatus: response.status, success: true });
   return (await response.json()) as T;
 }
 
 export function createEngineSession(input: unknown) {
-  return request("/sessions", {
+  return request<{ id: string; status: string; consent_status: string }>("/sessions", {
     method: "POST",
     body: JSON.stringify(input ?? {})
   });
