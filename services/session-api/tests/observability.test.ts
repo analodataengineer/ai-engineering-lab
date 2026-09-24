@@ -103,6 +103,8 @@ test("generation usage is normalized without propagating content", () => {
     inputCachedTokens: 30,
     outputTokens: 25,
     totalTokens: 125,
+    aggregateUncachedInputTokens: 70,
+    aggregateCachedInputTokens: 30,
     aggregateOutputTokens: 25,
     aggregateTotalTokens: 125
   });
@@ -183,6 +185,23 @@ test("runtime 102/64/275/377 usage has no aggregate/component overlap", () => {
   assert.equal(Object.hasOwn(usage!, "input_cached"), false);
   assert.equal(Object.hasOwn(usage!, "output"), false);
   assert.equal(Object.hasOwn(usage!, "total"), false);
+});
+
+test("generation metadata preserves safe cache aggregates and hit ratio", () => {
+  const events: Array<Record<string, string | number | boolean>> = [];
+  const observability = createObservability({ enabled: false, logger: (_name, fields) => events.push(fields) });
+  observability.generation("realtime.generation", {
+    sessionId: "session-cache-ratio",
+    inputTokens: 100,
+    inputUncachedTokens: 30,
+    inputCachedTokens: 70,
+    outputTokens: 5,
+    totalTokens: 105
+  });
+  assert.equal(events[0].aggregateInputTokens, 100);
+  assert.equal(events[0].aggregateUncachedInputTokens, 30);
+  assert.equal(events[0].aggregateCachedInputTokens, 70);
+  assert.equal(events[0].cacheHitRatio, 0.7);
 });
 
 test("generation rejects invalid absolute timestamps without affecting business code", () => {

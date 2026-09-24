@@ -56,7 +56,7 @@ realtime.closed
 
 Duration spans cover consent resolution, workflow steps, Realtime responses, engine requests, and terminal transitions where the current runtime has a clear start and end. The implementation does not create a span for every Realtime protocol message.
 
-## Realtime usage and cost
+## AI FinOps / Usage and Cost Tracking
 
 The browser reads the authoritative `response.done` event from OpenAI Realtime. It forwards only the response ID, model/status, duration, and validated numeric usage fields to the Session API; response output, transcript text, prompts, and audio are never forwarded.
 
@@ -65,6 +65,33 @@ Each response with usage is represented server-side as a Langfuse `generation` n
 Realtime response start and completion use absolute `Date.now()` timestamps for the generation `startTime` and `end()` time. `performance.now()` remains monotonic-only and is retained as diagnostic `durationMs` metadata.
 
 Langfuse can infer cost when the response model has a matching model/pricing definition in the project. If the model is not recognized, configure that model in Langfuse; pricing is intentionally not hardcoded in the application.
+
+Each response remains an independent generation. The shared `sessionId` lets Langfuse aggregate response generations into one interview session. Safe metadata also exposes aggregate input/output/total tokens, cached and uncached input, text/audio breakdowns, and `cacheHitRatio` when `inputTokens > 0`. Monetary cost is inferred by Langfuse only when a matching model definition supplies prices; token usage remains available when pricing is not configured.
+
+Sanitized generation shape:
+
+```yaml
+name: realtime.generation
+sessionId: session-example
+responseId: resp-example
+model: gpt-realtime
+durationMs: 1650
+usageDetails:
+  input_text_uncached: 210
+  input_text_cached: 120
+  input_audio_uncached: 40
+  input_audio_cached: 10
+  output_text: 75
+  output_audio: 0
+metadata:
+  aggregateInputTokens: 380
+  aggregateCachedInputTokens: 130
+  aggregateOutputTokens: 75
+  aggregateTotalTokens: 455
+  cacheHitRatio: 0.3421
+```
+
+No transcript, prompt, response content, audio, candidate data, credentials, or raw provider payload is included. Invalid, incomplete, or inconsistent usage is ignored by the observability layer and cannot block the interview.
 
 ## Privacy rules
 

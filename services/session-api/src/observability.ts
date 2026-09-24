@@ -184,11 +184,18 @@ export function createObservability(options: {
       for (const [key, value] of [
         ["aggregateInputTokens", fields.inputTokens],
         ["aggregateOutputTokens", fields.outputTokens],
-        ["aggregateTotalTokens", fields.totalTokens]
+        ["aggregateTotalTokens", fields.totalTokens],
+        ["aggregateUncachedInputTokens", fields.inputUncachedTokens],
+        ["aggregateCachedInputTokens", fields.inputCachedTokens]
       ] as const) {
         if (value === undefined) continue;
         if (!Number.isInteger(value) || value < 0) return;
         metadata[key] = value;
+      }
+      if (fields.inputTokens !== undefined && fields.inputTokens > 0 && fields.inputCachedTokens !== undefined) {
+        const cacheHitRatio = fields.inputCachedTokens / fields.inputTokens;
+        if (!Number.isFinite(cacheHitRatio) || cacheHitRatio < 0 || cacheHitRatio > 1) return;
+        metadata.cacheHitRatio = cacheHitRatio;
       }
       const usageDetails = buildRealtimeUsageDetails(fields);
       if (!usageDetails) return;
